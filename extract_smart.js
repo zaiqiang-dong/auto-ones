@@ -186,7 +186,7 @@ async function extractBugsSmart() {
     console.log(`✓ 找到 ${bugList.length} 个符合条件的Bug\n`);
     
     // DEBUG模式: 只处理前2个Bug
-    const debugMode = true;
+    const debugMode = false;
     const bugsToProcess = debugMode ? bugList.slice(0, 2) : bugList;
     
     if (debugMode) {
