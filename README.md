@@ -4,13 +4,24 @@
 
 ## 功能特性
 
+### extract_smart.js - Bug 信息提取
 - ✅ 自动登录 ONES 系统
 - ✅ 遍历 Bug 列表
 - ✅ 根据日期过滤 Bug
 - ✅ 根据关键字过滤 Bug 标题
+- ✅ 根据项目名过滤 Bug 标题
 - ✅ 提取详细的 Bug 信息（ID、标题、优先级、状态、指派人、创建时间等）
-- ✅ 从详情页提取额外信息（Log地址、VIN号、Build版本、问题时间）
+- ✅ 从详情页提取额外信息（Log地址、VIN号、Build版本、编译类型、问题时间）
 - ✅ 导出为 JSON 格式文件
+
+### process_bugs.js - Bug 文件处理
+- ✅ 自动创建日期目录结构
+- ✅ 为每个 Bug 创建独立目录
+- ✅ 下载 Log 文件
+- ✅ 自动进行 Dump 解析（访问 http://172.25.32.27:8088/）
+- ✅ 自动选择项目、上传文件、填写版本
+- ✅ 等待解析完成并下载结果
+- ✅ 解析并保存分析结果
 
 ## 安装
 
@@ -25,7 +36,7 @@ npm install
 
 ## 使用方法
 
-### 基本用法
+### 提取 Bug 信息
 
 ```bash
 # 提取指定日期的所有 Bug
@@ -37,6 +48,20 @@ node extract_smart.js 2026-05-12 minidump
 # 提取指定日期、匹配项目名且标题包含关键字的 Bug
 node extract_smart.js 2026-05-12 minidump 五菱F710S
 ```
+
+### 处理 Bug 文件（下载 Log 并解析 Dump）
+
+```bash
+# 处理提取的 JSON 文件
+node process_bugs.js output/bugs_2026-05-12_xxx.json
+```
+
+该脚本会：
+1. 根据 Bug 创建时间创建日期目录
+2. 为每个 Bug 创建以 ID 命名的子目录
+3. 下载 Log 文件到对应目录
+4. 自动访问 Dump 分析器进行解析
+5. 下载解析结果并保存
 
 ### 参数说明
 

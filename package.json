@@ -4,8 +4,9 @@
   "description": "从 ONES 系统提取 Bug 信息的工具",
   "main": "extract_bugs.js",
   "scripts": {
-    "start": "node extract_bugs.js",
-    "extract": "node extract_bugs.js"
+    "start": "node extract_smart.js",
+    "extract": "node extract_smart.js",
+    "process": "node process_bugs.js"
   },
   "keywords": [
     "puppeteer",
