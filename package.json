@@ -1,0 +1,20 @@
+{
+  "name": "auto-ones-bug-extractor",
+  "version": "1.0.0",
+  "description": "从 ONES 系统提取 Bug 信息的工具",
+  "main": "extract_bugs.js",
+  "scripts": {
+    "start": "node extract_bugs.js",
+    "extract": "node extract_bugs.js"
+  },
+  "keywords": [
+    "puppeteer",
+    "bug-extractor",
+    "ones"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^21.0.0"
+  }
+}
