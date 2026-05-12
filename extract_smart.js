@@ -211,21 +211,28 @@ async function extractBugsSmart() {
             
             // 方法1: 查找包含Bug标题的元素(通常是链接)
             const allElements = await page.$$('a, span, div');
+            console.log(`  → 找到 ${allElements.length} 个元素`);
+            
             for (const el of allElements) {
-                const text = await page.evaluate(e => e.textContent.trim(), el);
-                // 匹配标题 - 标题通常在ID后面一行
-                if (text && text.includes(bug.title.substring(0, 20))) {  // 匹配标题前20个字符
-                    const isClickable = await page.evaluate(e => {
-                        return e.tagName === 'A' || 
-                               window.getComputedStyle(e).cursor === 'pointer' ||
-                               e.closest('a') !== null;
-                    }, el);
-                    
-                    if (isClickable) {
-                        bugElement = el;
-                        console.log(`  → 找到标题元素: ${text.substring(0, 50)}`);
-                        break;
+                try {
+                    const text = await page.evaluate(e => e.textContent.trim(), el);
+                    // 匹配标题 - 标题通常在ID后面一行
+                    if (text && text.includes(bug.title.substring(0, 20))) {  // 匹配标题前20个字符
+                        const isClickable = await page.evaluate(e => {
+                            return e.tagName === 'A' || 
+                                   window.getComputedStyle(e).cursor === 'pointer' ||
+                                   e.closest('a') !== null;
+                        }, el);
+                        
+                        if (isClickable) {
+                            bugElement = el;
+                            console.log(`  → 找到标题元素: ${text.substring(0, 50)}`);
+                            break;
+                        }
                     }
+                } catch (e) {
+                    // 元素可能已经失效，跳过
+                    continue;
                 }
             }
             
@@ -233,11 +240,15 @@ async function extractBugsSmart() {
             if (!bugElement) {
                 console.log(`  → 未找到标题,尝试点击ID...`);
                 for (const el of allElements) {
-                    const text = await page.evaluate(e => e.textContent.trim(), el);
-                    if (text === bug.id || (text.includes(bug.id) && text.length < 30)) {
-                        bugElement = el;
-                        console.log(`  → 找到ID元素: ${text}`);
-                        break;
+                    try {
+                        const text = await page.evaluate(e => e.textContent.trim(), el);
+                        if (text === bug.id || (text.includes(bug.id) && text.length < 30)) {
+                            bugElement = el;
+                            console.log(`  → 找到ID元素: ${text}`);
+                            break;
+                        }
+                    } catch (e) {
+                        continue;
                     }
                 }
             }
@@ -301,8 +312,17 @@ async function extractBugsSmart() {
                 }
             });
             
-            // 等待选项卡内容加载
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            // 等待选项卡内容加载，增加等待时间确保动态内容完全加载
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
+            // 额外等待网络请求完成
+            try {
+                await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => {
+                    console.log('  → 网络空闲超时，继续提取');
+                });
+            } catch (e) {
+                // 忽略错误
+            }
             
             // 从详情页提取额外信息
             const details = await page.evaluate(() => {
@@ -342,72 +362,77 @@ async function extractBugsSmart() {
                     console.log('找到编译类型:', details.compile_type);
                 }
                 
-                // 提取Log地址 - 查找包含"点击下载"的链接或按钮
-                const logLinks = Array.from(document.querySelectorAll('a, button'));
-                let foundLogLink = false;
+                // 提取Log地址 - 从 link 属性中提取
+                console.log('开始提取Log地址...');
                 
-                for (const element of logLinks) {
-                    const href = element.href || '';
-                    const text = element.textContent || '';
-                    const dataset = element.dataset || {};
+                // 策略1: 查找包含 link 属性的元素（如 <span link="...">）
+                const elementsWithLink = document.querySelectorAll('[link]');
+                console.log(`找到 ${elementsWithLink.length} 个带link属性的元素`);
+                
+                for (const element of elementsWithLink) {
+                    const linkAttr = element.getAttribute('link');
+                    const text = (element.textContent || '').trim();
                     
-                    // 优先查找包含"点击下载"或"下载"的元素
-                    if (text.includes('点击下载') || text.includes('下载')) {
-                        // 检查href
-                        if (href && (href.startsWith('http') || href.startsWith('/'))) {
-                            details.log_address = href;
-                            console.log('找到Log下载链接(href):', details.log_address.substring(0, 100));
-                            foundLogLink = true;
-                            break;
+                    console.log(`检查元素: text="${text.substring(0, 30)}", link="${linkAttr ? linkAttr.substring(0, 100) : 'none'}"`);
+                    
+                    if (linkAttr && linkAttr.length > 10) {
+                        // 优先选择包含“下载”、“log”、“monitor”等关键字的链接
+                        if (text.includes('下载') || 
+                            linkAttr.toLowerCase().includes('log') || 
+                            linkAttr.toLowerCase().includes('download') ||
+                            linkAttr.toLowerCase().includes('monitor')) {
+                            details.log_address = linkAttr;
+                            console.log('✓ 从link属性找到Log地址:', details.log_address.substring(0, 150));
+                            return details;
                         }
-                        // 检查data属性中是否有URL
-                        for (const key in dataset) {
-                            const value = dataset[key];
-                            if (value && (value.startsWith('http') || value.includes('log'))) {
-                                details.log_address = value;
-                                console.log('找到Log下载链接(data):', details.log_address.substring(0, 100));
-                                foundLogLink = true;
-                                break;
+                    }
+                }
+                
+                // 策略2: 如果没找到，尝试从所有元素的自定义属性中查找
+                const allElements = Array.from(document.querySelectorAll('*'));
+                for (const element of allElements) {
+                    try {
+                        const attrs = element.attributes;
+                        for (const attr of attrs) {
+                            const attrName = attr.name.toLowerCase();
+                            const attrValue = attr.value || '';
+                            
+                            // 查找名为 link、data-link、url、href 等的属性
+                            if ((attrName === 'link' || attrName === 'data-link' || attrName === 'data-url') && 
+                                attrValue.length > 10 &&
+                                (attrValue.toLowerCase().includes('log') || 
+                                 attrValue.toLowerCase().includes('download') ||
+                                 attrValue.toLowerCase().includes('monitor'))) {
+                                details.log_address = attrValue;
+                                console.log('✓ 从自定义属性找到Log地址:', details.log_address.substring(0, 150));
+                                return details;
                             }
                         }
-                        if (foundLogLink) break;
+                    } catch (e) {
+                        continue;
                     }
                 }
                 
-                // 如果没找到,尝试查找包含log关键字的链接
-                if (!foundLogLink) {
-                    for (const link of logLinks) {
-                        const href = link.href || '';
-                        const text = link.textContent || '';
-                        if (href && href.length > 10 && (href.toLowerCase().includes('log') || text.toLowerCase().includes('log'))) {
-                            details.log_address = href;
-                            console.log('找到Log相关链接:', details.log_address.substring(0, 100));
-                            foundLogLink = true;
-                            break;
-                        }
+                // 策略3: 从文本中提取云存储链接或API链接
+                const urlPatterns = [
+                    // 匹配 shawngw-dev.autoai.com 的下载链接
+                    /https?:\/\/[\w.-]+\.autoai\.com\/[\w./-]*download[\w./-]*/gi,
+                    /https?:\/\/[\w.-]+\.autoai\.com\/[\w./-]*log[\w./-]*/gi,
+                    // 匹配 KS3 云存储链接
+                    /https?:\/\/[\w.-]+\.ksyuncs\.com\/[\w./-]*/gi,
+                ];
+                
+                for (const pattern of urlPatterns) {
+                    const matches = fullText.match(pattern);
+                    if (matches && matches.length > 0) {
+                        details.log_address = matches[0];
+                        console.log('✓ 从文本中找到URL:', details.log_address.substring(0, 150));
+                        return details;
                     }
                 }
                 
-                // 如果还是没找到,尝试从文本中提取URL
-                if (!foundLogLink) {
-                    // 尝试匹配各种URL格式
-                    const urlPatterns = [
-                        /(https?:\/\/[^\s"<>]+)/i,
-                        /(http:\/\/[^\s"<>]+)/i,
-                        /([\w.-]+\.[\w]{2,}\/[^\s"<>]*log[^\s"<>]*)/i
-                    ];
-                    
-                    for (const pattern of urlPatterns) {
-                        const urlMatch = fullText.match(pattern);
-                        if (urlMatch) {
-                            details.log_address = urlMatch[1];
-                            console.log('从文本中找到URL:', details.log_address.substring(0, 100));
-                            foundLogLink = true;
-                            break;
-                        }
-                    }
-                }
-                
+                console.log('✗ 未找到Log地址');
+
                 // 提取问题时间 - 匹配"问题时间："后面的日期时间
                 const issueTimeMatch = fullText.match(/问题时间\s*：\s*\d+\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i) ||
                                       fullText.match(/问题时间\s*：\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i);
