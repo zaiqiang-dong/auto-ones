@@ -66,10 +66,12 @@ async function extractBugsSmart() {
     const args = process.argv.slice(2);
     const dateParam = args[0] || '2026-05-12';
     const keyword = args[1] || '';
+    const projectName = args[2] || '';
     
     console.log(`过滤条件:`);
     console.log(`  日期: ${dateParam}`);
-    console.log(`  关键字: ${keyword || '无'}\n`);
+    console.log(`  关键字: ${keyword || '无'}`);
+    console.log(`  项目名: ${projectName || '无'}\n`);
     
     // 使用JavaScript直接解析页面内容,获取Bug列表
     console.log('正在提取Bug列表...');
@@ -78,7 +80,7 @@ async function extractBugsSmart() {
     const textLength = await page.evaluate(() => document.body.innerText.length);
     console.log(`页面文本长度: ${textLength}`);
     
-    const bugList = await page.evaluate((targetDate, searchKeyword) => {
+    const bugList = await page.evaluate((targetDate, searchKeyword, searchProject) => {
         const text = document.body.innerText;
         const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
         
@@ -161,15 +163,25 @@ async function extractBugsSmart() {
             bugs.push(currentBug);
         }
         
-        // 如果有关键字,进行过滤
+        // 过滤逻辑：先匹配项目名，再匹配关键字
+        let filteredBugs = bugs;
+        
+        // 第一步：如果提供了项目名，先按项目名过滤
+        if (searchProject) {
+            filteredBugs = filteredBugs.filter(bug => 
+                bug.title.toLowerCase().includes(searchProject.toLowerCase())
+            );
+        }
+        
+        // 第二步：如果提供了关键字，再按关键字过滤
         if (searchKeyword) {
-            return bugs.filter(bug => 
+            filteredBugs = filteredBugs.filter(bug => 
                 bug.title.toLowerCase().includes(searchKeyword.toLowerCase())
             );
         }
         
-        return bugs;
-    }, dateParam, keyword);
+        return filteredBugs;
+    }, dateParam, keyword, projectName);
     
     console.log(`✓ 找到 ${bugList.length} 个符合条件的Bug\n`);
     

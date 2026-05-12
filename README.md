@@ -29,10 +29,13 @@ npm install
 
 ```bash
 # 提取指定日期的所有 Bug
-node extract_bugs.js 2026-05-12
+node extract_smart.js 2026-05-12
 
 # 提取指定日期且标题包含关键字的 Bug
-node extract_bugs.js 2026-05-12 minidump
+node extract_smart.js 2026-05-12 minidump
+
+# 提取指定日期、匹配项目名且标题包含关键字的 Bug
+node extract_smart.js 2026-05-12 minidump 五菱F710S
 ```
 
 ### 参数说明
@@ -44,6 +47,11 @@ node extract_bugs.js 2026-05-12 minidump
 - **参数2 (可选)**: 关键字
   - 示例: `minidump`
   - 只提取标题中包含该关键字的 Bug
+
+- **参数3 (可选)**: 项目名
+  - 示例: `五菱F710S`
+  - 先按项目名过滤，再按关键字过滤
+  - 如果同时提供参数2和参数3，Bug 标题需要同时包含项目名和关键字
 
 ### 输出结果
 
