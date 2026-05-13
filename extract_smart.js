@@ -707,7 +707,7 @@ async function extractBugsSmart() {
     }
     
     // 保存到JSON文件
-    const outputDir = path.join(__dirname, 'output');
+    const outputDir = path.join(__dirname, 'extract_bugs');
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
     }
