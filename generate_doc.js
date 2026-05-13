@@ -23,7 +23,7 @@ function findLatestBugJson() {
     const outputDir = path.join(__dirname, 'output');
     
     if (!fs.existsSync(outputDir)) {
-        throw new Error('output 目录不存在，请先运行 extract_smart.js');
+        throw new Error('output 目录不存在，请先运行 extract_bugs.js');
     }
     
     const files = fs.readdirSync(outputDir)
@@ -131,20 +131,19 @@ function generateFeishuDocContent(bugs, processedBugsDir) {
 }
 
 /**
- * 保存飞书文档
+ * 保存文档
  */
-function saveFeishuDoc(content, dateParam) {
+function saveDoc(content, dateParam) {
     const outputDir = path.join(__dirname, 'output');
     if (!fs.existsSync(outputDir)) {
         fs.mkdirSync(outputDir, { recursive: true });
     }
     
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const outputFile = path.join(outputDir, `feishu_doc_${dateParam}_${timestamp}.md`);
+    const outputFile = path.join(outputDir, `doc_${dateParam}.md`);
     
     fs.writeFileSync(outputFile, content, 'utf-8');
     
-    console.log(`\n✓ 飞书文档已保存到: ${outputFile}`);
+    console.log(`\n✓ 文档已保存到: ${outputFile}`);
     return outputFile;
 }
 
@@ -156,7 +155,7 @@ async function main() {
     console.log('  Bug 分析与飞书文档生成工具');
     console.log('========================================\n');
     
-    // 获取命令行参数（与 extract_smart.js 相同）
+    // 获取命令行参数（与 extract_bugs.js 相同）
     const args = process.argv.slice(2);
     const dateParam = args[0] || '2026-05-12';
     const keyword = args[1] || '';
@@ -167,9 +166,9 @@ async function main() {
     console.log(`  关键字: ${keyword || '无'}`);
     console.log(`  项目名: ${projectName || '无'}\n`);
     
-    // 步骤 1: 调用 extract_smart.js 生成 Bug JSON 文件
+    // 步骤 1: 调用 extract_bugs.js 生成 Bug JSON 文件
     console.log('========== 步骤 1: 提取 Bug 信息 ==========');
-    let extractCmd = `node extract_smart.js ${dateParam}`;
+    let extractCmd = `node extract_bugs.js ${dateParam}`;
     if (keyword) {
         extractCmd += ` "${keyword}"`;
     }
@@ -200,20 +199,20 @@ async function main() {
     const bugs = readBugJson(jsonFile.path);
     console.log(`✓ 读取到 ${bugs.length} 个 Bug`);
     
-    // 步骤 4: 生成飞书文档
-    console.log('\n========== 步骤 4: 生成飞书文档 ==========');
+    // 步骤 4: 生成文档
+    console.log('\n========== 步骤 4: 生成文档 ==========');
     const processedBugsDir = path.join(__dirname, 'processed_bugs');
     const docContent = generateFeishuDocContent(bugs, processedBugsDir);
     
     // 保存文档
-    const outputFile = saveFeishuDoc(docContent, dateParam);
+    const outputFile = saveDoc(docContent, dateParam);
     
     console.log('\n========================================');
     console.log('  ✓ 所有步骤完成！');
     console.log('========================================');
     console.log(`\n输出文件:`);
     console.log(`  Bug JSON: ${jsonFile.path}`);
-    console.log(`  飞书文档: ${outputFile}`);
+    console.log(`  文档: ${outputFile}`);
     console.log(`\n提示: 可以将 Markdown 文件内容复制到飞书文档中`);
 }
 
