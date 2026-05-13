@@ -134,8 +134,18 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
         
         // 监听并自动处理浏览器原生对话框（alert/confirm/prompt）
         let dialogDetected = false;
+        let dialogType = 'error'; // 'success' 或 'error'
         page.on('dialog', async (dialog) => {
             console.log(`    → 检测到对话框: ${dialog.type()}, 消息: ${dialog.message()}`);
+            
+            // 检查对话框消息内容，判断是成功还是错误
+            const message = dialog.message();
+            if (message.includes('解析成功') || message.includes('成功')) {
+                dialogType = 'success';
+            } else {
+                dialogType = 'error';
+            }
+            
             await dialog.accept(); // 自动点击确定
             console.log(`    ✓ 已关闭对话框`);
             dialogDetected = true; // 标记已检测到对话框
@@ -258,7 +268,12 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
         while (waited < maxWait) {
             // 如果检测到对话框（通过 page.on('dialog')），直接跳出
             if (dialogDetected) {
-                console.log(`    ⚠ 解析过程中出现错误对话框`);
+                if (dialogType === 'success') {
+                    console.log(`    ✓ 解析成功`);
+                    parseSuccess = true;
+                } else {
+                    console.log(`    ⚠ 解析失败`);
+                }
                 break;
             }
             
@@ -403,45 +418,72 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
         // 步骤4.7: 如果解析成功，下载结果
         if (parseSuccess) {
             console.log(`    → 下载解析结果...`);
-            const downloadButton = await page.evaluateHandle(() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                for (const button of buttons) {
-                    const text = button.textContent.trim();
-                    if ((text.includes('下载') || text.includes('Download')) && 
-                        (text.includes('结果') || text.includes('Result'))) {
-                        return button;
+            
+            // 等待下载按钮出现（最多等待10秒）
+            let downloadButton = null;
+            let waitCount = 0;
+            while (waitCount < 5) { // 5次 * 2秒 = 10秒
+                downloadButton = await page.evaluateHandle(() => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    for (const button of buttons) {
+                        const text = button.textContent.trim();
+                        if ((text.includes('下载') || text.includes('Download')) && 
+                            (text.includes('结果') || text.includes('Result'))) {
+                            return button;
+                        }
                     }
+                    return null;
+                });
+                
+                if (downloadButton) {
+                    break;
                 }
-                return null;
-            });
+                
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                waitCount++;
+                console.log(`    → 等待下载按钮出现... (${waitCount * 2}s)`);
+            }
             
             if (downloadButton) {
+                console.log(`    → 找到下载按钮，开始下载...`);
                 // 监听下载事件
-                const downloadPromise = new Promise((resolve) => {
+                const downloadPromise = new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('下载超时'));
+                    }, 30000); // 30秒超时
+                    
                     client.on('Page.downloadWillBegin', (event) => {
                         console.log(`    → 开始下载: ${event.suggestedFilename}`);
                     });
                     
                     client.on('Page.downloadProgress', (event) => {
                         if (event.state === 'completed') {
+                            clearTimeout(timeout);
                             resolve();
+                        } else if (event.state === 'canceled' || event.state === 'interrupted') {
+                            clearTimeout(timeout);
+                            reject(new Error(`下载失败: ${event.state}`));
                         }
                     });
                 });
                 
-                await downloadButton.click();
-                await downloadPromise;
-                
-                // 等待文件写入完成
-                await new Promise(resolve => setTimeout(resolve, 3000));
-                
-                console.log(`    ✓ 解析结果下载完成`);
-                
-                // 步骤4.8: 解析下载的文件
-                console.log(`    → 查找并解析下载的文件...`);
-                await parseResultFiles(bugDir, bugId);
+                try {
+                    await downloadButton.click();
+                    await downloadPromise;
+                    
+                    // 等待文件写入完成
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    
+                    console.log(`    ✓ 解析结果下载完成`);
+                    
+                    // 步骤4.8: 解析下载的文件
+                    console.log(`    → 查找并解析下载的文件...`);
+                    await parseResultFiles(bugDir, bugId);
+                } catch (error) {
+                    console.log(`    ⚠ 下载失败: ${error.message}`);
+                }
             } else {
-                console.log(`    ⚠ 未找到下载结果按钮`);
+                console.log(`    ⚠ 未找到下载结果按钮，跳过下载`);
             }
         } else {
             console.log(`    ⚠ 解析失败或超时，跳过下载`);
