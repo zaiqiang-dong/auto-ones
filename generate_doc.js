@@ -20,10 +20,10 @@ function runCommand(command) {
  * 查找最新的 Bug JSON 文件
  */
 function findLatestBugJson() {
-    const outputDir = path.join(__dirname, 'output');
+    const outputDir = path.join(__dirname, 'extract_bugs');
     
     if (!fs.existsSync(outputDir)) {
-        throw new Error('output 目录不存在，请先运行 extract_bugs.js');
+        throw new Error('extract_bugs 目录不存在，请先运行 extract_bugs.js');
     }
     
     const files = fs.readdirSync(outputDir)
