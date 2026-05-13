@@ -216,8 +216,18 @@ async function autoScrollAndExtract(page, targetDate, keyword, projectName) {
                     continue;
                 }
                 
-                // 等待弹窗加载
-                await new Promise(resolve => setTimeout(resolve, 3000));
+                // 等待弹窗加载（增加等待时间确保完全加载）
+                console.log(`    → 等待弹窗加载...`);
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                
+                // 尝试等待网络空闲
+                try {
+                    await page.waitForNetworkIdle({ idleTime: 500, timeout: 10000 }).catch(() => {
+                        console.log(`    → 网络空闲超时，继续处理`);
+                    });
+                } catch (e) {
+                    // 忽略错误
+                }
                 
                 // 尝试点击"详情"选项卡
                 await page.evaluate(() => {
@@ -235,8 +245,18 @@ async function autoScrollAndExtract(page, targetDate, keyword, projectName) {
                     }
                 });
                 
-                // 等待选项卡内容加载
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                // 等待选项卡内容加载（增加等待时间）
+                console.log(`    → 等待详情内容加载...`);
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                // 再次等待网络空闲
+                try {
+                    await page.waitForNetworkIdle({ idleTime: 500, timeout: 10000 }).catch(() => {
+                        console.log(`    → 网络空闲超时，继续提取`);
+                    });
+                } catch (e) {
+                    // 忽略错误
+                }
                 
                 // 从详情页提取额外信息
                 const details = await page.evaluate(() => {
