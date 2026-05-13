@@ -500,16 +500,16 @@ function findUefiLogs(bugDir) {
 function generateDocContent(bugs, processedBugsDir) {
     console.log('\n========== 生成文档内容 ==========');
     
-    let docContent = '# Bug 分析报告\n\n';
-    docContent += `**生成时间**: ${new Date().toLocaleString('zh-CN')}\n\n`;
-    docContent += `**Bug 总数**: ${bugs.length}\n\n`;
-    docContent += '---\n\n';
+    let docContent = '# Bug 分析报告\n';
+    docContent += `**生成时间**: ${new Date().toLocaleString('zh-CN')}\n`;
+    docContent += `**Bug 总数**: ${bugs.length}\n`;
+    docContent += '---\n';
     
     bugs.forEach((bug, index) => {
         console.log(`处理第 ${index + 1}/${bugs.length} 个 Bug: ${bug.id}`);
         
         // Bug ID 作为标题
-        docContent += `## ${index + 1}. ${bug.id}\n\n`;
+        docContent += `## ${index + 1}. ${bug.id}\n`;
         
         // 遍历 Bug 对象的所有字段
         for (const [key, value] of Object.entries(bug)) {
@@ -539,18 +539,18 @@ function generateDocContent(bugs, processedBugsDir) {
             
             // 根据值的类型进行不同的显示
             if (value === null || value === undefined || value === '') {
-                docContent += `**${fieldName}**: 未填写\n\n`;
+                docContent += `**${fieldName}**: 未填写\n`;
             } else if (key === 'bug_url' && typeof value === 'string' && value.startsWith('http')) {
                 // Bug地址显示为可点击的链接
-                docContent += `**${fieldName}**: [${value}](${value})\n\n`;
+                docContent += `**${fieldName}**: [${value}](${value})\n`;
             } else if (typeof value === 'object') {
-                docContent += `**${fieldName}**:\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n\n`;
+                docContent += `**${fieldName}**:\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`;
             } else {
-                docContent += `**${fieldName}**: ${value}\n\n`;
+                docContent += `**${fieldName}**: ${value}\n`;
             }
         }
         
-        docContent += '---\n\n';
+        docContent += '---\n';
     });
     
     return docContent;
@@ -587,15 +587,15 @@ async function main() {
     const keyword = args[1] || '';
     const projectName = args[2] || '';
     const debugMode = args.includes('--debug') || args.includes('-d');
-    // 飞书文档现在是默认行为，不需要 --feishu 参数
-    const useFeishu = true;
+    // 默认输出 Markdown 文件
+    const useFeishu = false;
     
     console.log(`参数:`);
     console.log(`  日期: ${dateParam}`);
     console.log(`  关键字: ${keyword || '无'}`);
     console.log(`  项目名: ${projectName || '无'}`);
     console.log(`  调试模式: ${debugMode ? '是（跳过提取和解析）' : '否'}`);
-    console.log(`  飞书文档: ${useFeishu ? '是' : '否'}\n`);
+    console.log(`  输出格式: Markdown\n`);
     
     let jsonFile;
     let bugs;
@@ -652,31 +652,16 @@ async function main() {
     const processedBugsDir = path.join(__dirname, 'processed_bugs');
     const docContent = generateDocContent(bugs, processedBugsDir);
     
-    if (useFeishu) {
-        // 创建飞书文档
-        console.log('\n========== 步骤 5: 创建飞书文档 ==========');
-        const accessToken = await getFeishuAccessToken();
-        const docTitle = `Bug 分析报告 - ${dateParam}`;
-        const result = await createFeishuDoc(accessToken, docTitle, docContent);
-        
-        console.log('\n========================================');
-        console.log('  ✓ 所有步骤完成！');
-        console.log('========================================');
-        console.log(`\n输出:`);
-        console.log(`  Bug JSON: ${jsonFile.path}`);
-        console.log(`  飞书文档: ${result.url}`);
-    } else {
-        // 保存为 Markdown 文件
-        const outputFile = saveDoc(docContent, dateParam);
-        
-        console.log('\n========================================');
-        console.log('  ✓ 所有步骤完成！');
-        console.log('========================================');
-        console.log(`\n输出文件:`);
-        console.log(`  Bug JSON: ${jsonFile.path}`);
-        console.log(`  文档: ${outputFile}`);
-        console.log(`\n提示: 可以将 Markdown 文件内容复制到飞书文档中`);
-    }
+    // 保存为 Markdown 文件
+    const outputFile = saveDoc(docContent, dateParam);
+    
+    console.log('\n========================================');
+    console.log('  ✓ 所有步骤完成！');
+    console.log('========================================');
+    console.log(`\n输出文件:`);
+    console.log(`  Bug JSON: ${jsonFile.path}`);
+    console.log(`  文档: ${outputFile}`);
+    console.log(`\n提示: 可以将 Markdown 文件内容复制到飞书文档中`);
 }
 
 main().catch(error => {
