@@ -128,6 +128,15 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
             downloadPath: bugDir
         });
         
+        // 监听并自动处理浏览器原生对话框（alert/confirm/prompt）
+        let dialogDetected = false;
+        page.on('dialog', async (dialog) => {
+            console.log(`    → 检测到对话框: ${dialog.type()}, 消息: ${dialog.message()}`);
+            await dialog.accept(); // 自动点击确定
+            console.log(`    ✓ 已关闭对话框`);
+            dialogDetected = true; // 标记已检测到对话框
+        });
+        
         console.log(`    → 打开 Dump 分析器...`);
         await page.goto(CONFIG.dumpAnalyzerUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         
@@ -236,27 +245,149 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
         console.log(`    → 等待解析完成...`);
         await new Promise(resolve => setTimeout(resolve, 10000)); // 初始等待
         
-        // 轮询检查"下载解析结果"按钮是否可点击
+        // 轮询检查是否弹出确认消息或"下载解析结果"按钮
         let maxWait = 60000; // 最多等待60秒
         let waited = 0;
         const checkInterval = 2000;
+        let parseSuccess = false;
         
         while (waited < maxWait) {
-            const downloadReady = await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                for (const button of buttons) {
+            // 如果检测到对话框（通过 page.on('dialog')），直接跳出
+            if (dialogDetected) {
+                console.log(`    ⚠ 解析过程中出现错误对话框`);
+                break;
+            }
+            
+            const result = await page.evaluate(() => {
+                // 检查是否有确认弹窗（对话框）- 使用多种检测方法
+                // 方法1: 查找常见的模态框类名
+                const modalSelectors = [
+                    '.modal', '.dialog', '[role="dialog"]',
+                    '.ant-modal', '.el-dialog', '.v-modal',
+                    '.ones-modal', '.modal-content',
+                    '[class*="modal"]', '[class*="dialog"]'
+                ];
+                
+                for (const selector of modalSelectors) {
+                    try {
+                        const modals = document.querySelectorAll(selector);
+                        for (const modal of modals) {
+                            // 检查是否可见
+                            const style = window.getComputedStyle(modal);
+                            if (style.display !== 'none' && 
+                                style.visibility !== 'hidden' && 
+                                parseFloat(style.opacity) > 0) {
+                                console.log('找到模态框:', selector, modal.className);
+                                return { type: 'dialog', found: true };
+                            }
+                        }
+                    } catch (e) {
+                        // 忽略无效选择器
+                    }
+                }
+                
+                // 方法2: 查找所有包含"确定"、"确认"、"OK"文本的按钮（可能在弹窗中）
+                const allButtons = Array.from(document.querySelectorAll('button'));
+                for (const btn of allButtons) {
+                    const text = btn.textContent.trim();
+                    if (text === '确定' || text === '确认' || text === 'OK' || text === '关闭') {
+                        console.log('找到确认按钮:', text);
+                        // 检查这个按钮是否在可见的容器中
+                        let parent = btn.parentElement;
+                        while (parent) {
+                            const style = window.getComputedStyle(parent);
+                            if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                // 如果父元素有模态框特征
+                                if (parent.classList.contains('modal') || 
+                                    parent.classList.contains('dialog') ||
+                                    parent.getAttribute('role') === 'dialog' ||
+                                    style.position === 'fixed' ||
+                                    style.zIndex > 1000) {
+                                    console.log('按钮在模态框中');
+                                    return { type: 'dialog', found: true };
+                                }
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+                }
+                
+                // 检查是否有"下载解析结果"按钮
+                for (const button of allButtons) {
                     const text = button.textContent.trim();
                     if ((text.includes('下载') || text.includes('Download')) && 
                         (text.includes('结果') || text.includes('Result')) &&
                         !button.disabled) {
-                        return true;
+                        console.log('找到下载按钮:', text);
+                        return { type: 'success', button: button };
                     }
                 }
-                return false;
+                
+                return { type: 'waiting' };
             });
             
-            if (downloadReady) {
-                console.log(`    ✓ 解析完成`);
+            if (result.type === 'dialog') {
+                console.log(`    → 检测到确认弹窗，点击确认...`);
+                // 点击对话框中的确认按钮
+                await page.evaluate(() => {
+                    // 查找所有包含"确定"、"确认"、"OK"文本的按钮
+                    const allButtons = Array.from(document.querySelectorAll('button'));
+                    for (const btn of allButtons) {
+                        const text = btn.textContent.trim();
+                        if (text === '确定' || text === '确认' || text === 'OK' || text === '关闭') {
+                            // 检查这个按钮是否在可见的模态框中
+                            let parent = btn.parentElement;
+                            while (parent) {
+                                const style = window.getComputedStyle(parent);
+                                if (style.display !== 'none' && style.visibility !== 'hidden') {
+                                    if (parent.classList.contains('modal') || 
+                                        parent.classList.contains('dialog') ||
+                                        parent.getAttribute('role') === 'dialog' ||
+                                        style.position === 'fixed' ||
+                                        style.zIndex > 1000) {
+                                        btn.click();
+                                        return true;
+                                    }
+                                }
+                                parent = parent.parentElement;
+                            }
+                        }
+                    }
+                    // 如果没有找到特定按钮，尝试点击第一个可见的模态框中的按钮
+                    const modalSelectors = [
+                        '.modal', '.dialog', '[role="dialog"]',
+                        '.ant-modal', '.el-dialog', '.v-modal',
+                        '.ones-modal', '.modal-content'
+                    ];
+                    
+                    for (const selector of modalSelectors) {
+                        try {
+                            const modals = document.querySelectorAll(selector);
+                            for (const modal of modals) {
+                                const style = window.getComputedStyle(modal);
+                                if (style.display !== 'none' && 
+                                    style.visibility !== 'hidden' && 
+                                    parseFloat(style.opacity) > 0) {
+                                    const buttons = modal.querySelectorAll('button');
+                                    if (buttons.length > 0) {
+                                        buttons[buttons.length - 1].click(); // 点击最后一个按钮（通常是确认）
+                                        return true;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            // 忽略
+                        }
+                    }
+                    return false;
+                });
+                
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                console.log(`    ✓ 已确认弹窗`);
+                break;
+            } else if (result.type === 'success') {
+                console.log(`    ✓ 解析成功`);
+                parseSuccess = true;
                 break;
             }
             
@@ -265,48 +396,52 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
             console.log(`    → 等待中... (${waited/1000}s)`);
         }
         
-        // 点击下载结果按钮
-        console.log(`    → 下载解析结果...`);
-        const downloadButton = await page.evaluateHandle(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            for (const button of buttons) {
-                const text = button.textContent.trim();
-                if ((text.includes('下载') || text.includes('Download')) && 
-                    (text.includes('结果') || text.includes('Result'))) {
-                    return button;
-                }
-            }
-            return null;
-        });
-        
-        if (downloadButton) {
-            // 监听下载事件
-            const downloadPromise = new Promise((resolve) => {
-                client.on('Page.downloadWillBegin', (event) => {
-                    console.log(`    → 开始下载: ${event.suggestedFilename}`);
-                });
-                
-                client.on('Page.downloadProgress', (event) => {
-                    if (event.state === 'completed') {
-                        resolve();
+        // 步骤4.7: 如果解析成功，下载结果
+        if (parseSuccess) {
+            console.log(`    → 下载解析结果...`);
+            const downloadButton = await page.evaluateHandle(() => {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                for (const button of buttons) {
+                    const text = button.textContent.trim();
+                    if ((text.includes('下载') || text.includes('Download')) && 
+                        (text.includes('结果') || text.includes('Result'))) {
+                        return button;
                     }
-                });
+                }
+                return null;
             });
             
-            await downloadButton.click();
-            await downloadPromise;
-            
-            // 等待文件写入完成
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            console.log(`    ✓ 解析结果下载完成`);
+            if (downloadButton) {
+                // 监听下载事件
+                const downloadPromise = new Promise((resolve) => {
+                    client.on('Page.downloadWillBegin', (event) => {
+                        console.log(`    → 开始下载: ${event.suggestedFilename}`);
+                    });
+                    
+                    client.on('Page.downloadProgress', (event) => {
+                        if (event.state === 'completed') {
+                            resolve();
+                        }
+                    });
+                });
+                
+                await downloadButton.click();
+                await downloadPromise;
+                
+                // 等待文件写入完成
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                console.log(`    ✓ 解析结果下载完成`);
+                
+                // 步骤4.8: 解析下载的文件
+                console.log(`    → 查找并解析下载的文件...`);
+                await parseResultFiles(bugDir, bugId);
+            } else {
+                console.log(`    ⚠ 未找到下载结果按钮`);
+            }
         } else {
-            throw new Error('未找到下载结果按钮');
+            console.log(`    ⚠ 解析失败或超时，跳过下载`);
         }
-        
-        // 步骤4.7: 解析下载的文件
-        console.log(`    → 查找并解析下载的文件...`);
-        await parseResultFiles(bugDir, bugId);
         
     } finally {
         await page.close();
