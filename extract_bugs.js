@@ -107,7 +107,8 @@ async function autoScrollAndExtract(page, targetDate, keyword, projectName) {
                         id: bugId,
                         title: title,
                         created_at: created_at,
-                        rowIndex: rowIndex
+                        rowIndex: rowIndex,
+                        bug_url: `https://ones.autoai.com/project/#/team/TEakUst8/project/GJLD/component/9p616bX9/view/DL8fAMwo/issue/detail/${bugId}`
                     });
                 } catch (e) {
                     // 忽略错误
@@ -396,7 +397,8 @@ async function autoScrollAndExtract(page, targetDate, keyword, projectName) {
                     build_version: details.build_version || '',
                     compile_type: details.compile_type || '',
                     log_address: details.log_address || '',
-                    issue_time: details.issue_time || ''
+                    issue_time: details.issue_time || '',
+                    bug_url: bug.bug_url || ''  // 保留 bug_url 字段
                 };
                 
                 allBugs.push(bugWithDetails);

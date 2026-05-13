@@ -531,7 +531,8 @@ function generateDocContent(bugs, processedBugsDir) {
                 'status': '状态',
                 'priority': '优先级',
                 'assignee': '指派人',
-                'description': '描述'
+                'description': '描述',
+                'bug_url': 'Bug地址'
             };
             
             const fieldName = fieldNames[key] || key;
@@ -539,6 +540,9 @@ function generateDocContent(bugs, processedBugsDir) {
             // 根据值的类型进行不同的显示
             if (value === null || value === undefined || value === '') {
                 docContent += `**${fieldName}**: 未填写\n\n`;
+            } else if (key === 'bug_url' && typeof value === 'string' && value.startsWith('http')) {
+                // Bug地址显示为可点击的链接
+                docContent += `**${fieldName}**: [${value}](${value})\n\n`;
             } else if (typeof value === 'object') {
                 docContent += `**${fieldName}**:\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n\n`;
             } else {
