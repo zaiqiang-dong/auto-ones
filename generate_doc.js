@@ -186,6 +186,11 @@ async function main() {
     const jsonFile = findLatestBugJson();
     console.log(`\n✓ 找到 Bug JSON 文件: ${jsonFile.name}`);
     
+    // 步骤 2.5: 先读取 Bug 数据（在调用 process_bugs.js 之前）
+    console.log('\n========== 步骤 2.5: 预读取 Bug 数据 ==========');
+    const bugs = readBugJson(jsonFile.path);
+    console.log(`✓ 读取到 ${bugs.length} 个 Bug`);
+    
     // 步骤 2: 调用 process_bugs.js 解析 Dump
     console.log('\n========== 步骤 2: 解析 Dump 文件 ==========');
     const processCmd = `node process_bugs.js ${jsonFile.path}`;
@@ -194,10 +199,8 @@ async function main() {
         console.error('✗ Dump 解析失败，但仍继续生成文档');
     }
     
-    // 步骤 3: 读取 Bug JSON 数据
-    console.log('\n========== 步骤 3: 读取 Bug 数据 ==========');
-    const bugs = readBugJson(jsonFile.path);
-    console.log(`✓ 读取到 ${bugs.length} 个 Bug`);
+    // 步骤 3: 使用已读取的 Bug 数据
+    console.log('\n========== 步骤 3: 准备生成文档 ==========');
     
     // 步骤 4: 生成文档
     console.log('\n========== 步骤 4: 生成文档 ==========');
