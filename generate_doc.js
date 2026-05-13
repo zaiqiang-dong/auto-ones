@@ -546,29 +546,6 @@ function generateDocContent(bugs, processedBugsDir) {
             }
         }
         
-        // 查找对应的 UefiLog 文件
-        const bugId = bug.id;
-        const dateStr = bug.created_at ? bug.created_at.split(' ')[0] : '';
-        const bugDir = path.join(processedBugsDir, dateStr, bugId);
-        
-        console.log(`  → 查找目录: ${bugDir}`);
-        
-        const uefiLogs = findUefiLogs(bugDir);
-        
-        if (uefiLogs.length > 0) {
-            docContent += `### UEFI Log 分析\n\n`;
-            
-            uefiLogs.forEach((log, logIndex) => {
-                docContent += `#### ${log.filename}\n\n`;
-                docContent += '```\n';
-                docContent += log.content;
-                docContent += '\n```\n\n';
-            });
-        } else {
-            docContent += `### UEFI Log 分析\n\n`;
-            docContent += `*未找到 UEFI Log 文件*\n\n`;
-        }
-        
         docContent += '---\n\n';
     });
     
