@@ -5,6 +5,8 @@ const https = require('https');
 const http = require('http');
 const { URL } = require('url');
 const AdmZip = require('adm-zip'); // 用于解压 zip 文件
+const tar = require('tar'); // 用于解压 tar.gz 文件
+const zlib = require('zlib'); // 用于 gzip 解压缩
 
 // 配置
 const CONFIG = {
@@ -495,29 +497,74 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
 }
 
 /**
- * 解压缩目录下的所有 zip 文件
+ * 解压缩目录下的所有压缩文件（zip 和 tar.gz）
  */
 async function extractZipFiles(bugDir, bugId) {
     console.log(`  → 检查并解压压缩文件...`);
     
     const files = fs.readdirSync(bugDir);
     const zipFiles = files.filter(f => f.toLowerCase().endsWith('.zip'));
+    const tarGzFiles = files.filter(f => f.toLowerCase().endsWith('.tar.gz'));
     
-    if (zipFiles.length === 0) {
-        console.log(`  ⚠ 未找到 zip 文件`);
+    if (zipFiles.length === 0 && tarGzFiles.length === 0) {
+        console.log(`  ⚠ 未找到压缩文件`);
         return;
     }
     
     console.log(`  → 找到 ${zipFiles.length} 个 zip 文件: ${zipFiles.join(', ')}`);
+    console.log(`  → 找到 ${tarGzFiles.length} 个 tar.gz 文件: ${tarGzFiles.join(', ')}`);
     
+    // 解压 zip 文件
     for (const zipFile of zipFiles) {
         const zipPath = path.join(bugDir, zipFile);
-        const extractDir = path.join(bugDir, path.basename(zipFile, '.zip'));
+        // 根据文件名生成解压目录名
+        let extractDir;
+        if (zipFile.startsWith('log_')) {
+            // log 文件解压到同名目录
+            extractDir = path.join(bugDir, path.basename(zipFile, '.zip'));
+        } else if (zipFile.includes('result') || zipFile.includes('parse') || zipFile.includes('analysis')) {
+            // 解析结果文件解压到 result 目录
+            extractDir = path.join(bugDir, 'result');
+        } else {
+            // 其他 zip 文件解压到同名目录
+            extractDir = path.join(bugDir, path.basename(zipFile, '.zip'));
+        }
         
         try {
             console.log(`    → 解压: ${zipFile}`);
             const zip = new AdmZip(zipPath);
             zip.extractAllTo(extractDir, true); // true = 覆盖已存在的文件
+            console.log(`    ✓ 解压完成: ${extractDir}`);
+        } catch (error) {
+            console.log(`    ✗ 解压失败: ${error.message}`);
+        }
+    }
+    
+    // 解压 tar.gz 文件
+    for (const tarGzFile of tarGzFiles) {
+        const tarGzPath = path.join(bugDir, tarGzFile);
+        // 根据文件名生成解压目录名
+        let extractDir;
+        if (tarGzFile.includes('result') || tarGzFile.includes('parse') || tarGzFile.includes('analysis')) {
+            // 解析结果文件解压到 result 目录
+            extractDir = path.join(bugDir, 'result');
+        } else {
+            // 其他 tar.gz 文件解压到同名目录（去掉 .tar.gz）
+            extractDir = path.join(bugDir, path.basename(tarGzFile, '.tar.gz'));
+        }
+        
+        try {
+            console.log(`    → 解压: ${tarGzFile}`);
+            // 创建解压目录
+            if (!fs.existsSync(extractDir)) {
+                fs.mkdirSync(extractDir, { recursive: true });
+            }
+            // 解压 tar.gz 文件
+            await tar.x({
+                file: tarGzPath,
+                cwd: extractDir,
+                strip: 0 // 不剥离任何路径前缀
+            });
             console.log(`    ✓ 解压完成: ${extractDir}`);
         } catch (error) {
             console.log(`    ✗ 解压失败: ${error.message}`);
