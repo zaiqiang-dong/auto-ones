@@ -71,10 +71,10 @@ function findUefiLogs(bugDir) {
 }
 
 /**
- * 生成飞书文档内容
+ * 生成文档内容（包含所有 Bug 字段）
  */
-function generateFeishuDocContent(bugs, processedBugsDir) {
-    console.log('\n========== 生成飞书文档内容 ==========');
+function generateDocContent(bugs, processedBugsDir) {
+    console.log('\n========== 生成文档内容 ==========');
     
     let docContent = '# Bug 分析报告\n\n';
     docContent += `**生成时间**: ${new Date().toLocaleString('zh-CN')}\n\n`;
@@ -84,26 +84,47 @@ function generateFeishuDocContent(bugs, processedBugsDir) {
     bugs.forEach((bug, index) => {
         console.log(`处理第 ${index + 1}/${bugs.length} 个 Bug: ${bug.id}`);
         
-        // Bug 基本信息
+        // Bug ID 作为标题
         docContent += `## ${index + 1}. ${bug.id}\n\n`;
-        docContent += `**标题**: ${bug.title}\n\n`;
-        docContent += `**创建时间**: ${bug.createTime}\n\n`;
-        docContent += `**状态**: ${bug.status || '未知'}\n\n`;
-        docContent += `**优先级**: ${bug.priority || '未知'}\n\n`;
         
-        // Bug 描述
-        if (bug.description) {
-            docContent += `**描述**:\n\n${bug.description}\n\n`;
-        }
-        
-        // Log 地址
-        if (bug.logUrl) {
-            docContent += `**Log 地址**: ${bug.logUrl}\n\n`;
+        // 遍历 Bug 对象的所有字段
+        for (const [key, value] of Object.entries(bug)) {
+            // 跳过一些不需要显示的字段
+            if (['rowIndex'].includes(key)) {
+                continue;
+            }
+            
+            // 格式化字段名（中文显示）
+            const fieldNames = {
+                'id': 'Bug ID',
+                'title': '标题',
+                'created_at': '创建时间',
+                'vin': 'VIN号',
+                'build_version': 'Build版本',
+                'compile_type': '编译类型',
+                'log_address': 'Log地址',
+                'issue_time': '问题时间',
+                'status': '状态',
+                'priority': '优先级',
+                'assignee': '指派人',
+                'description': '描述'
+            };
+            
+            const fieldName = fieldNames[key] || key;
+            
+            // 根据值的类型进行不同的显示
+            if (value === null || value === undefined || value === '') {
+                docContent += `**${fieldName}**: *未填写*\n\n`;
+            } else if (typeof value === 'object') {
+                docContent += `**${fieldName}**:\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n\n`;
+            } else {
+                docContent += `**${fieldName}**: ${value}\n\n`;
+            }
         }
         
         // 查找对应的 UefiLog 文件
         const bugId = bug.id;
-        const dateStr = bug.createTime ? bug.createTime.split(' ')[0] : '';
+        const dateStr = bug.created_at ? bug.created_at.split(' ')[0] : '';
         const bugDir = path.join(processedBugsDir, dateStr, bugId);
         
         console.log(`  → 查找目录: ${bugDir}`);
@@ -152,60 +173,76 @@ function saveDoc(content, dateParam) {
  */
 async function main() {
     console.log('========================================');
-    console.log('  Bug 分析与飞书文档生成工具');
+    console.log('  Bug 分析与文档生成工具');
     console.log('========================================\n');
     
-    // 获取命令行参数（与 extract_bugs.js 相同）
+    // 获取命令行参数
     const args = process.argv.slice(2);
     const dateParam = args[0] || '2026-05-12';
     const keyword = args[1] || '';
     const projectName = args[2] || '';
+    const debugMode = args.includes('--debug') || args.includes('-d');
     
     console.log(`参数:`);
     console.log(`  日期: ${dateParam}`);
     console.log(`  关键字: ${keyword || '无'}`);
-    console.log(`  项目名: ${projectName || '无'}\n`);
+    console.log(`  项目名: ${projectName || '无'}`);
+    console.log(`  调试模式: ${debugMode ? '是（跳过提取和解析）' : '否'}\n`);
     
-    // 步骤 1: 调用 extract_bugs.js 生成 Bug JSON 文件
-    console.log('========== 步骤 1: 提取 Bug 信息 ==========');
-    let extractCmd = `node extract_bugs.js ${dateParam}`;
-    if (keyword) {
-        extractCmd += ` "${keyword}"`;
+    let jsonFile;
+    let bugs;
+    
+    if (debugMode) {
+        // 调试模式：直接使用已有的 JSON 文件
+        console.log('========== 调试模式：使用已有数据 ==========');
+        jsonFile = findLatestBugJson();
+        console.log(`✓ 找到 Bug JSON 文件: ${jsonFile.name}`);
+        
+        console.log('\n========== 读取 Bug 数据 ==========');
+        bugs = readBugJson(jsonFile.path);
+        console.log(`✓ 读取到 ${bugs.length} 个 Bug`);
+    } else {
+        // 正常模式：执行完整流程
+        // 步骤 1: 调用 extract_bugs.js 生成 Bug JSON 文件
+        console.log('========== 步骤 1: 提取 Bug 信息 ==========');
+        let extractCmd = `node extract_bugs.js ${dateParam}`;
+        if (keyword) {
+            extractCmd += ` "${keyword}"`;
+        }
+        if (projectName) {
+            extractCmd += ` "${projectName}"`;
+        }
+        
+        const extractSuccess = runCommand(extractCmd);
+        if (!extractSuccess) {
+            console.error('✗ Bug 提取失败，终止执行');
+            process.exit(1);
+        }
+        
+        // 查找生成的 JSON 文件
+        jsonFile = findLatestBugJson();
+        console.log(`\n✓ 找到 Bug JSON 文件: ${jsonFile.name}`);
+        
+        // 步骤 2.5: 先读取 Bug 数据（在调用 process_bugs.js 之前）
+        console.log('\n========== 步骤 2.5: 预读取 Bug 数据 ==========');
+        bugs = readBugJson(jsonFile.path);
+        console.log(`✓ 读取到 ${bugs.length} 个 Bug`);
+        
+        // 步骤 2: 调用 process_bugs.js 解析 Dump
+        console.log('\n========== 步骤 2: 解析 Dump 文件 ==========');
+        const processCmd = `node process_bugs.js ${jsonFile.path}`;
+        const processSuccess = runCommand(processCmd);
+        if (!processSuccess) {
+            console.error('✗ Dump 解析失败，但仍继续生成文档');
+        }
+        
+        console.log('\n========== 步骤 3: 准备生成文档 ==========');
     }
-    if (projectName) {
-        extractCmd += ` "${projectName}"`;
-    }
-    
-    const extractSuccess = runCommand(extractCmd);
-    if (!extractSuccess) {
-        console.error('✗ Bug 提取失败，终止执行');
-        process.exit(1);
-    }
-    
-    // 查找生成的 JSON 文件
-    const jsonFile = findLatestBugJson();
-    console.log(`\n✓ 找到 Bug JSON 文件: ${jsonFile.name}`);
-    
-    // 步骤 2.5: 先读取 Bug 数据（在调用 process_bugs.js 之前）
-    console.log('\n========== 步骤 2.5: 预读取 Bug 数据 ==========');
-    const bugs = readBugJson(jsonFile.path);
-    console.log(`✓ 读取到 ${bugs.length} 个 Bug`);
-    
-    // 步骤 2: 调用 process_bugs.js 解析 Dump
-    console.log('\n========== 步骤 2: 解析 Dump 文件 ==========');
-    const processCmd = `node process_bugs.js ${jsonFile.path}`;
-    const processSuccess = runCommand(processCmd);
-    if (!processSuccess) {
-        console.error('✗ Dump 解析失败，但仍继续生成文档');
-    }
-    
-    // 步骤 3: 使用已读取的 Bug 数据
-    console.log('\n========== 步骤 3: 准备生成文档 ==========');
     
     // 步骤 4: 生成文档
     console.log('\n========== 步骤 4: 生成文档 ==========');
     const processedBugsDir = path.join(__dirname, 'processed_bugs');
-    const docContent = generateFeishuDocContent(bugs, processedBugsDir);
+    const docContent = generateDocContent(bugs, processedBugsDir);
     
     // 保存文档
     const outputFile = saveDoc(docContent, dateParam);
