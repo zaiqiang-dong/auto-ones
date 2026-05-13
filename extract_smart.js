@@ -248,41 +248,120 @@ async function autoScrollAndExtract(page, targetDate, keyword, projectName) {
                         issue_time: ''
                     };
                     
-                    const fullText = document.body.innerText;
-                    
-                    // 提取VIN号
-                    const vinMatch = fullText.match(/车辆VIN号\s*：\s*([A-Z0-9]+)/i) || 
-                                    fullText.match(/VIN号\s*：\s*([A-Z0-9]+)/i) ||
-                                    fullText.match(/VIN\s*[:：]\s*([A-Z0-9]{17})/i);
-                    if (vinMatch) {
-                        details.vin = vinMatch[1].trim();
-                    }
-                    
-                    // 提取Build版本
-                    const buildMatch = fullText.match(/Build版本[:\s]*：?\s*(.+)/i);
-                    if (buildMatch) {
-                        details.build_version = buildMatch[1].trim();
-                    }
-                    
-                    // 提取编译类型
-                    const compileTypeMatch = fullText.match(/编译类型[:\s]*：?\s*(.+)/i);
-                    if (compileTypeMatch) {
-                        details.compile_type = compileTypeMatch[1].trim();
-                    }
-                    
-                    // 提取Log地址 - 从 link 属性中提取
-                    const elementsWithLink = document.querySelectorAll('[link]');
-                    for (const element of elementsWithLink) {
-                        const linkAttr = element.getAttribute('link');
-                        const text = (element.textContent || '').trim();
+                    // 策略1: 尝试从富文本编辑器中提取（#field016）
+                    const field016 = document.querySelector('#field016');
+                    if (field016) {
+                        console.log('找到 #field016 元素');
+                        const allTextBlocks = field016.querySelectorAll('.text-block');
+                        console.log(`找到 ${allTextBlocks.length} 个文本块`);
                         
-                        if (linkAttr && linkAttr.length > 10) {
-                            if (text.includes('下载') || 
-                                linkAttr.toLowerCase().includes('log') || 
-                                linkAttr.toLowerCase().includes('download') ||
-                                linkAttr.toLowerCase().includes('monitor')) {
-                                details.log_address = linkAttr;
-                                break;
+                        for (const block of allTextBlocks) {
+                            const textContent = block.textContent || '';
+                            
+                            // 提取VIN号
+                            if (textContent.includes('车辆VIN号') || textContent.includes('VIN号')) {
+                                const vinMatch = textContent.match(/(?:车辆)?VIN号\s*[:：]\s*([A-Z0-9]{17})/i);
+                                if (vinMatch) {
+                                    details.vin = vinMatch[1].trim();
+                                    console.log('从富文本提取VIN:', details.vin);
+                                }
+                            }
+                            
+                            // 提取Build版本
+                            if (textContent.includes('Build版本') || textContent.includes('Build')) {
+                                const buildMatch = textContent.match(/Build版本\s*[:：]\s*(.+)/i);
+                                if (buildMatch) {
+                                    details.build_version = buildMatch[1].trim();
+                                    console.log('从富文本提取Build:', details.build_version.substring(0, 60));
+                                }
+                            }
+                            
+                            // 提取编译类型
+                            if (textContent.includes('编译类型')) {
+                                const compileTypeMatch = textContent.match(/编译类型\s*[:：]\s*(.+)/i);
+                                if (compileTypeMatch) {
+                                    details.compile_type = compileTypeMatch[1].trim();
+                                    console.log('从富文本提取编译类型:', details.compile_type);
+                                }
+                            }
+                            
+                            // 提取Log地址 - 从 link 属性中提取
+                            if (textContent.includes('Log地址') || textContent.includes('log')) {
+                                const linkElements = block.querySelectorAll('[link]');
+                                for (const linkEl of linkElements) {
+                                    const linkAttr = linkEl.getAttribute('link');
+                                    if (linkAttr && linkAttr.length > 10) {
+                                        details.log_address = linkAttr;
+                                        console.log('从富文本提取Log地址:', details.log_address.substring(0, 100));
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // 提取问题时间
+                            if (textContent.includes('问题时间')) {
+                                const issueTimeMatch = textContent.match(/问题时间\s*[:：]\s*(?:\d+\s+)?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i);
+                                if (issueTimeMatch) {
+                                    details.issue_time = issueTimeMatch[1];
+                                    console.log('从富文本提取问题时间:', details.issue_time);
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 策略2: 如果富文本中没有找到，尝试从整个页面文本中提取
+                    if (!details.vin || !details.build_version || !details.log_address) {
+                        console.log('富文本提取不完整，尝试从页面文本提取...');
+                        const fullText = document.body.innerText;
+                        
+                        if (!details.vin) {
+                            const vinMatch = fullText.match(/(?:车辆)?VIN号\s*[:：]\s*([A-Z0-9]{17})/i);
+                            if (vinMatch) {
+                                details.vin = vinMatch[1].trim();
+                                console.log('从页面文本提取VIN:', details.vin);
+                            }
+                        }
+                        
+                        if (!details.build_version) {
+                            const buildMatch = fullText.match(/Build版本\s*[:：]\s*(.+)/i);
+                            if (buildMatch) {
+                                details.build_version = buildMatch[1].trim();
+                                console.log('从页面文本提取Build:', details.build_version.substring(0, 60));
+                            }
+                        }
+                        
+                        if (!details.compile_type) {
+                            const compileTypeMatch = fullText.match(/编译类型\s*[:：]\s*(.+)/i);
+                            if (compileTypeMatch) {
+                                details.compile_type = compileTypeMatch[1].trim();
+                                console.log('从页面文本提取编译类型:', details.compile_type);
+                            }
+                        }
+                        
+                        if (!details.log_address) {
+                            const elementsWithLink = document.querySelectorAll('[link]');
+                            for (const element of elementsWithLink) {
+                                const linkAttr = element.getAttribute('link');
+                                const text = (element.textContent || '').trim();
+                                
+                                if (linkAttr && linkAttr.length > 10) {
+                                    if (text.includes('下载') || 
+                                        linkAttr.toLowerCase().includes('log') || 
+                                        linkAttr.toLowerCase().includes('download') ||
+                                        linkAttr.toLowerCase().includes('monitor')) {
+                                        details.log_address = linkAttr;
+                                        console.log('从页面文本提取Log地址:', details.log_address.substring(0, 100));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (!details.issue_time) {
+                            const issueTimeMatch = fullText.match(/问题时间\s*[:：]\s*(?:\d+\s+)?(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/i);
+                            if (issueTimeMatch) {
+                                details.issue_time = issueTimeMatch[1];
+                                console.log('从页面文本提取问题时间:', details.issue_time);
                             }
                         }
                     }
