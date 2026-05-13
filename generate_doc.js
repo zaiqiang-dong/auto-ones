@@ -1,10 +1,434 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
+
+// 飞书配置
+let FEISHU_CONFIG = {
+    appId: '',
+    appSecret: '',
+    folderToken: '',
+};
+
+// 尝试从配置文件加载
+const configPath = path.join(__dirname, 'feishu_config.json');
+if (fs.existsSync(configPath)) {
+    try {
+        const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        FEISHU_CONFIG = { ...FEISHU_CONFIG, ...configData };
+        console.log('✓ 已加载飞书配置文件');
+    } catch (error) {
+        console.log('⚠ 加载飞书配置文件失败，使用默认配置');
+    }
+}
 
 /**
- * 执行命令并获取输出
+ * 获取飞书访问令牌
  */
+async function getFeishuAccessToken() {
+    console.log('→ 获取飞书访问令牌...');
+    try {
+        const response = await axios.post(
+            'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+            {
+                app_id: FEISHU_CONFIG.appId,
+                app_secret: FEISHU_CONFIG.appSecret
+            }
+        );
+        
+        if (response.data.code === 0) {
+            console.log('✓ 获取访问令牌成功');
+            return response.data.tenant_access_token;
+        } else {
+            throw new Error(`获取令牌失败: ${response.data.msg}`);
+        }
+    } catch (error) {
+        console.error('✗ 获取访问令牌失败:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * 创建飞书云文档
+ */
+async function createFeishuDoc(accessToken, title, content) {
+    console.log('→ 创建飞书云文档...');
+    try {
+        // 第一步：创建空文档
+        const createResponse = await axios.post(
+            'https://open.feishu.cn/open-apis/docx/v1/documents',
+            {
+                title: title,
+                folder_token: FEISHU_CONFIG.folderToken || undefined
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+        
+        if (createResponse.data.code !== 0) {
+            throw new Error(`创建文档失败: ${createResponse.data.msg} (code: ${createResponse.data.code})`);
+        }
+        
+        const documentId = createResponse.data.data.document.document_id;
+        console.log(`✓ 文档创建成功，ID: ${documentId}`);
+        
+        // 第二步：将 Markdown 内容转换为富文本并写入文档
+        console.log('→ 写入文档内容...');
+        try {
+            await writeContentToFeishuDoc(accessToken, documentId, content);
+        } catch (writeError) {
+            console.log('⚠ 内容自动写入失败，但文档已创建');
+            console.log('  您可以手动将 Markdown 文件内容复制到飞书文档中');
+            // 不抛出错误，继续返回文档信息
+        }
+        
+        // 返回文档链接
+        const docUrl = `https://autoai.feishu.cn/docx/${documentId}`;
+        console.log(`✓ 文档链接: ${docUrl}`);
+        
+        return {
+            documentId,
+            url: docUrl
+        };
+    } catch (error) {
+        if (error.response) {
+            // 服务器返回了错误响应
+            console.error('✗ 创建飞书文档失败:', error.message);
+            console.error('  状态码:', error.response.status);
+            console.error('  响应数据:', JSON.stringify(error.response.data, null, 2));
+        } else {
+            console.error('✗ 创建飞书文档失败:', error.message);
+        }
+        throw error;
+    }
+}
+
+/**
+ * 将 Markdown 内容写入飞书文档
+ * 注意：这里使用简单的方式，将 Markdown 作为纯文本写入
+ * 如果需要更好的格式，需要使用飞书的富文本 API
+ */
+async function writeContentToFeishuDoc(accessToken, documentId, markdownContent) {
+    try {
+        // 将 Markdown 转换为简单的富文本块
+        const blocks = convertMarkdownToBlocks(markdownContent);
+        
+        await axios.patch(
+            `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/batch_create`,
+            {
+                children: blocks
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+        
+        console.log('✓ 内容写入成功');
+    } catch (error) {
+        console.error('✗ 写入内容失败:', error.message);
+        // 如果批量写入失败，尝试使用简单方式
+        console.log('→ 尝试使用备用方式写入...');
+        await simpleWriteToFeishuDoc(accessToken, documentId, markdownContent);
+    }
+}
+
+/**
+ * 将文本中的 **text** 转换为飞书的富文本元素
+ */
+function parseBoldText(text) {
+    const elements = [];
+    const regex = /\*\*(.+?)\*\*/g;
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = regex.exec(text)) !== null) {
+        // 添加粗体前的普通文本
+        if (match.index > lastIndex) {
+            elements.push({
+                text_run: {
+                    content: text.substring(lastIndex, match.index)
+                }
+            });
+        }
+        
+        // 添加粗体文本
+        elements.push({
+            text_run: {
+                content: match[1],
+                text_element_style: {
+                    bold: true
+                }
+            }
+        });
+        
+        lastIndex = regex.lastIndex;
+    }
+    
+    // 添加剩余文本
+    if (lastIndex < text.length) {
+        elements.push({
+            text_run: {
+                content: text.substring(lastIndex)
+            }
+        });
+    }
+    
+    return elements.length > 0 ? elements : [{ text_run: { content: text } }];
+}
+
+/**
+ * 简单的写入方式：使用飞书的 blocks/children API
+ */
+async function simpleWriteToFeishuDoc(accessToken, documentId, markdownContent) {
+    try {
+        console.log('→ 尝试使用 blocks/children API 写入...');
+        
+        // 第一步：获取文档信息，找到 root block
+        console.log('  → 获取文档信息...');
+        const docInfo = await axios.get(
+            `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            }
+        );
+        
+        if (docInfo.data.code !== 0) {
+            throw new Error(`获取文档信息失败: ${docInfo.data.msg}`);
+        }
+        
+        // 第二步：获取文档的所有 blocks，找到第一个 block 作为 parent
+        console.log('  → 获取文档 blocks...');
+        const blocksResponse = await axios.get(
+            `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                },
+                params: {
+                    page_size: 1
+                }
+            }
+        );
+        
+        if (blocksResponse.data.code !== 0) {
+            throw new Error(`获取 Blocks 失败: ${blocksResponse.data.msg}`);
+        }
+        
+        const blocks = blocksResponse.data.data.items;
+        
+        // 如果文档为空，使用文档 ID 作为 parent block
+        let parentBlockId;
+        if (!blocks || blocks.length === 0) {
+            console.log('  → 文档为空，使用文档 ID 作为 Parent Block');
+            parentBlockId = documentId;
+        } else {
+            parentBlockId = blocks[0].block_id;
+            console.log(`  → Parent Block ID: ${parentBlockId}`);
+        }
+        
+        // 第三步：将 Markdown 按段落分割
+        const paragraphs = markdownContent.split('\n\n').filter(p => p.trim() !== '');
+        console.log(`→ 准备写入 ${paragraphs.length} 个段落...`);
+        
+        // 第四步：逐个段落写入
+        for (let i = 0; i < paragraphs.length; i++) {
+            const paragraph = paragraphs[i];
+            const lines = paragraph.split('\n').filter(line => line.trim() !== '');
+            
+            if (lines.length === 0) continue;
+            
+            // 构建 block
+            let block;
+            if (lines[0].startsWith('# ')) {
+                block = {
+                    block_type: 3,
+                    heading1: {
+                        elements: [{
+                            text_run: { content: lines[0].substring(2).trim() }
+                        }]
+                    }
+                };
+            } else if (lines[0].startsWith('## ')) {
+                block = {
+                    block_type: 4,
+                    heading2: {
+                        elements: [{
+                            text_run: { content: lines[0].substring(3).trim() }
+                        }]
+                    }
+                };
+            } else if (lines[0].startsWith('### ')) {
+                block = {
+                    block_type: 5,
+                    heading3: {
+                        elements: [{
+                            text_run: { content: lines[0].substring(4).trim() }
+                        }]
+                    }
+                };
+            } else if (lines[0].startsWith('---')) {
+                // 分隔线 - 需要 divider 字段
+                block = {
+                    block_type: 22,
+                    divider: {}
+                };
+            } else {
+                const content = lines.join('\n');
+                // 解析粗体标记，转换为富文本元素
+                const elements = parseBoldText(content);
+                block = {
+                    block_type: 2,
+                    text: {
+                        elements: elements
+                    }
+                };
+            }
+            
+            // 使用 POST /blocks/{block_id}/children API 添加子块
+            const requestBody = {
+                children: [block],
+                index: i  // 从 0 开始插入
+            };
+            
+            console.log(`  → 写入段落 ${i + 1}, block_type: ${block.block_type}`);
+            if (i === 0) {
+                console.log('  → 第一个 Block 结构:', JSON.stringify(block, null, 2).substring(0, 300));
+            }
+            
+            await axios.post(
+                `https://open.feishu.cn/open-apis/docx/v1/documents/${documentId}/blocks/${parentBlockId}/children`,
+                requestBody,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                }
+            );
+            
+            if ((i + 1) % 10 === 0 || i === paragraphs.length - 1) {
+                console.log(`  → 已写入 ${i + 1}/${paragraphs.length} 个段落`);
+            }
+            
+            // 避免频率限制，每个请求后暂停 400ms (每秒最多 2-3 次)
+            await new Promise(resolve => setTimeout(resolve, 400));
+        }
+        
+        console.log('✓ 内容写入成功');
+        return true;
+        
+    } catch (error) {
+        console.error('✗ 写入内容失败:', error.message);
+        if (error.response) {
+            console.error('  状态码:', error.response.status);
+            console.error('  响应数据:', JSON.stringify(error.response.data, null, 2).substring(0, 500));
+        }
+        throw error;
+    }
+}
+
+/**
+ * 将 Markdown 转换为飞书富文本块（简化版）
+ */
+function convertMarkdownToBlocks(markdown) {
+    const lines = markdown.split('\n');
+    const blocks = [];
+    let currentParagraph = [];
+    
+    for (const line of lines) {
+        // 标题
+        if (line.startsWith('# ')) {
+            if (currentParagraph.length > 0) {
+                blocks.push(createParagraphBlock(currentParagraph.join('\n')));
+                currentParagraph = [];
+            }
+            blocks.push(createHeadingBlock(line.substring(2), 1));
+        } else if (line.startsWith('## ')) {
+            if (currentParagraph.length > 0) {
+                blocks.push(createParagraphBlock(currentParagraph.join('\n')));
+                currentParagraph = [];
+            }
+            blocks.push(createHeadingBlock(line.substring(3), 2));
+        } else if (line.startsWith('### ')) {
+            if (currentParagraph.length > 0) {
+                blocks.push(createParagraphBlock(currentParagraph.join('\n')));
+                currentParagraph = [];
+            }
+            blocks.push(createHeadingBlock(line.substring(4), 3));
+        } else if (line.trim() === '') {
+            // 空行，结束当前段落
+            if (currentParagraph.length > 0) {
+                blocks.push(createParagraphBlock(currentParagraph.join('\n')));
+                currentParagraph = [];
+            }
+        } else if (line.startsWith('---')) {
+            // 分隔线
+            if (currentParagraph.length > 0) {
+                blocks.push(createParagraphBlock(currentParagraph.join('\n')));
+                currentParagraph = [];
+            }
+            blocks.push(createDividerBlock());
+        } else {
+            currentParagraph.push(line);
+        }
+    }
+    
+    // 处理最后的段落
+    if (currentParagraph.length > 0) {
+        blocks.push(createParagraphBlock(currentParagraph.join('\n')));
+    }
+    
+    return blocks;
+}
+
+function createHeadingBlock(text, level) {
+    return {
+        block_type: 3,  // Heading
+        heading: {
+            level: level,
+            elements: [
+                {
+                    text_run: {
+                        content: text,
+                        text_element_style: {
+                            bold: true
+                        }
+                    }
+                }
+            ]
+        }
+    };
+}
+
+function createParagraphBlock(text) {
+    return {
+        block_type: 2,  // Text
+        text: {
+            elements: [
+                {
+                    text_run: {
+                        content: text
+                    }
+                }
+            ]
+        }
+    };
+}
+
+function createDividerBlock() {
+    return {
+        block_type: 22  // Divider
+    };
+}
 function runCommand(command) {
     console.log(`\n→ 执行命令: ${command}`);
     try {
@@ -114,7 +538,7 @@ function generateDocContent(bugs, processedBugsDir) {
             
             // 根据值的类型进行不同的显示
             if (value === null || value === undefined || value === '') {
-                docContent += `**${fieldName}**: *未填写*\n\n`;
+                docContent += `**${fieldName}**: 未填写\n\n`;
             } else if (typeof value === 'object') {
                 docContent += `**${fieldName}**:\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n\n`;
             } else {
@@ -182,12 +606,15 @@ async function main() {
     const keyword = args[1] || '';
     const projectName = args[2] || '';
     const debugMode = args.includes('--debug') || args.includes('-d');
+    // 飞书文档现在是默认行为，不需要 --feishu 参数
+    const useFeishu = true;
     
     console.log(`参数:`);
     console.log(`  日期: ${dateParam}`);
     console.log(`  关键字: ${keyword || '无'}`);
     console.log(`  项目名: ${projectName || '无'}`);
-    console.log(`  调试模式: ${debugMode ? '是（跳过提取和解析）' : '否'}\n`);
+    console.log(`  调试模式: ${debugMode ? '是（跳过提取和解析）' : '否'}`);
+    console.log(`  飞书文档: ${useFeishu ? '是' : '否'}\n`);
     
     let jsonFile;
     let bugs;
@@ -239,21 +666,36 @@ async function main() {
         console.log('\n========== 步骤 3: 准备生成文档 ==========');
     }
     
-    // 步骤 4: 生成文档
+    // 步骤 4: 生成文档内容
     console.log('\n========== 步骤 4: 生成文档 ==========');
     const processedBugsDir = path.join(__dirname, 'processed_bugs');
     const docContent = generateDocContent(bugs, processedBugsDir);
     
-    // 保存文档
-    const outputFile = saveDoc(docContent, dateParam);
-    
-    console.log('\n========================================');
-    console.log('  ✓ 所有步骤完成！');
-    console.log('========================================');
-    console.log(`\n输出文件:`);
-    console.log(`  Bug JSON: ${jsonFile.path}`);
-    console.log(`  文档: ${outputFile}`);
-    console.log(`\n提示: 可以将 Markdown 文件内容复制到飞书文档中`);
+    if (useFeishu) {
+        // 创建飞书文档
+        console.log('\n========== 步骤 5: 创建飞书文档 ==========');
+        const accessToken = await getFeishuAccessToken();
+        const docTitle = `Bug 分析报告 - ${dateParam}`;
+        const result = await createFeishuDoc(accessToken, docTitle, docContent);
+        
+        console.log('\n========================================');
+        console.log('  ✓ 所有步骤完成！');
+        console.log('========================================');
+        console.log(`\n输出:`);
+        console.log(`  Bug JSON: ${jsonFile.path}`);
+        console.log(`  飞书文档: ${result.url}`);
+    } else {
+        // 保存为 Markdown 文件
+        const outputFile = saveDoc(docContent, dateParam);
+        
+        console.log('\n========================================');
+        console.log('  ✓ 所有步骤完成！');
+        console.log('========================================');
+        console.log(`\n输出文件:`);
+        console.log(`  Bug JSON: ${jsonFile.path}`);
+        console.log(`  文档: ${outputFile}`);
+        console.log(`\n提示: 可以将 Markdown 文件内容复制到飞书文档中`);
+    }
 }
 
 main().catch(error => {
