@@ -8,6 +8,365 @@ const CONFIG = {
     password: 'isbn7810@Autoai'
 };
 
+/**
+ * 自动滚动页面以加载所有内容
+ * @param {Object} page - Puppeteer page 对象
+ * @param {string} targetDate - 目标日期，用于判断是否继续滚动
+ */
+async function autoScrollAndExtract(page, targetDate, keyword, projectName) {
+    console.log('→ 开始智能滚动并逐个提取Bug...');
+    console.log(`  → 目标日期: ${targetDate}，将滚动直到发现早于此日期的Bug`);
+    console.log(`  → 关键字: ${keyword || '无'}`);
+    console.log(`  → 项目名: ${projectName || '无'}\n`);
+    
+    const extractedBugIds = new Set(); // 记录已提取的 Bug ID
+    const allBugs = []; // 存储所有提取的 Bug
+    let scrollRound = 0;
+    let foundOlderBug = false;
+    
+    while (!foundOlderBug) {
+        scrollRound++;
+        console.log(`\n========== 第 ${scrollRound} 轮滚动 ==========`);
+        
+        // 第一步：在当前页面查找符合条件的 Bug
+        console.log('→ 查找当前页面中的 Bug...');
+        const currentBugs = await page.evaluate((searchKeyword, searchProject) => {
+            const bugs = [];
+            
+            // 查找虚拟列表容器
+            const gridContainer = document.querySelector('#multi_function_table');
+            if (!gridContainer) {
+                return bugs;
+            }
+            
+            // 获取所有包含 task-description 的行
+            const titleElements = Array.from(gridContainer.querySelectorAll('.task-description.one-line--ellipsis'));
+            
+            for (const titleEl of titleElements) {
+                try {
+                    // 获取 span 标签的内容（Bug 标题）
+                    const spanEl = titleEl.querySelector('span');
+                    if (!spanEl) continue;
+                    
+                    const title = (spanEl.textContent || '').trim();
+                    if (!title) continue;
+                    
+                    // 如果有关键字，先过滤
+                    if (searchKeyword && !title.toLowerCase().includes(searchKeyword.toLowerCase())) {
+                        continue;
+                    }
+                    
+                    // 如果有项目名，再过滤
+                    if (searchProject && !title.toLowerCase().includes(searchProject.toLowerCase())) {
+                        continue;
+                    }
+                    
+                    // 向上查找父级行元素
+                    let rowElement = titleEl;
+                    while (rowElement && !rowElement.hasAttribute('data-row-index')) {
+                        rowElement = rowElement.parentElement;
+                    }
+                    
+                    if (!rowElement) continue;
+                    
+                    const rowIndex = rowElement.getAttribute('data-row-index');
+                    const rowId = rowElement.id;
+                    
+                    // 从 rowId 提取前缀
+                    const idParts = rowId.split('-field001-');
+                    if (idParts.length < 2) continue;
+                    const rowPrefix = idParts[0];
+                    
+                    // 提取 Bug ID (field903)
+                    let bugId = '';
+                    const bugIdSelector = `[id^="${rowPrefix}-field903-"][data-row-index="${rowIndex}"]`;
+                    const bugIdElement = gridContainer.querySelector(bugIdSelector);
+                    if (bugIdElement) {
+                        const bugIdText = (bugIdElement.textContent || '').trim();
+                        const idMatch = bugIdText.match(/GJLD-\d+/);
+                        if (idMatch) {
+                            bugId = idMatch[0];
+                        }
+                    }
+                    
+                    if (!bugId) continue;
+                    
+                    // 提取日期时间 (field009)
+                    let created_at = '';
+                    const dateSelector = `[id^="${rowPrefix}-field009-"][data-row-index="${rowIndex}"]`;
+                    const dateElement = gridContainer.querySelector(dateSelector);
+                    if (dateElement) {
+                        const dateText = (dateElement.textContent || '').trim();
+                        const dateMatch = dateText.match(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/);
+                        if (dateMatch) {
+                            created_at = dateMatch[0];
+                        }
+                    }
+                    
+                    bugs.push({
+                        id: bugId,
+                        title: title,
+                        created_at: created_at,
+                        rowIndex: rowIndex
+                    });
+                } catch (e) {
+                    // 忽略错误
+                }
+            }
+            
+            return bugs;
+        }, keyword, projectName);
+        
+        console.log(`  → 当前页面找到 ${currentBugs.length} 个符合条件的Bug`);
+        
+        // 第二步：检查是否发现早于目标日期的 Bug
+        if (currentBugs.length > 0) {
+            const dates = currentBugs.map(b => b.created_at).filter(d => d).sort();
+            if (dates.length > 0) {
+                const earliestDate = dates[0].split(' ')[0];
+                console.log(`  → 最早日期: ${earliestDate}`);
+                
+                if (earliestDate < targetDate) {
+                    console.log(`  ✓ 已发现早于 ${targetDate} 的Bug，将在处理完当前页面后停止`);
+                    foundOlderBug = true;
+                }
+            }
+        }
+        
+        // 第三步：逐个处理当前页面的 Bug
+        for (const bug of currentBugs) {
+            if (extractedBugIds.has(bug.id)) {
+                console.log(`  ⊘ 跳过已处理的 Bug: ${bug.id}`);
+                continue;
+            }
+            
+            // 先检查日期是否符合要求（只比较日期部分）
+            if (bug.created_at) {
+                const bugDate = bug.created_at.split(' ')[0];
+                if (bugDate !== targetDate) {
+                    console.log(`  ⊘ 跳过日期不符的 Bug: ${bug.id} (日期: ${bugDate}, 目标: ${targetDate})`);
+                    continue;
+                }
+            } else {
+                console.log(`  ⊘ 跳过无日期的 Bug: ${bug.id}`);
+                continue;
+            }
+            
+            console.log(`  → 处理 Bug: ${bug.id} - ${bug.title.substring(0, 50)}...`);
+            
+            try {
+                // 点击 Bug 标题打开详情弹窗
+                const clicked = await page.evaluate((bugId) => {
+                    // 查找包含该 Bug ID 的标题元素
+                    const titleElements = Array.from(document.querySelectorAll('.task-description.one-line--ellipsis'));
+                    
+                    for (const titleEl of titleElements) {
+                        const spanEl = titleEl.querySelector('span');
+                        if (!spanEl) continue;
+                        
+                        const title = (spanEl.textContent || '').trim();
+                        
+                        // 向上查找父级行元素获取 Bug ID
+                        let rowElement = titleEl;
+                        while (rowElement && !rowElement.hasAttribute('data-row-index')) {
+                            rowElement = rowElement.parentElement;
+                        }
+                        
+                        if (!rowElement) continue;
+                        
+                        const rowIndex = rowElement.getAttribute('data-row-index');
+                        const rowId = rowElement.id;
+                        const idParts = rowId.split('-field001-');
+                        if (idParts.length < 2) continue;
+                        const rowPrefix = idParts[0];
+                        
+                        // 提取 Bug ID
+                        const bugIdSelector = `[id^="${rowPrefix}-field903-"][data-row-index="${rowIndex}"]`;
+                        const bugIdElement = document.querySelector(bugIdSelector);
+                        if (!bugIdElement) continue;
+                        
+                        const bugIdText = (bugIdElement.textContent || '').trim();
+                        const idMatch = bugIdText.match(/GJLD-\d+/);
+                        if (!idMatch || idMatch[0] !== bugId) continue;
+                        
+                        // 找到匹配的 Bug，点击标题
+                        console.log(`找到 Bug ${bugId} 的标题元素，准备点击...`);
+                        
+                        // 尝试点击标题元素本身或其父级链接
+                        let clickTarget = titleEl;
+                        // 查找最近的链接
+                        const linkEl = titleEl.closest('a');
+                        if (linkEl) {
+                            clickTarget = linkEl;
+                        }
+                        
+                        clickTarget.click();
+                        return true;
+                    }
+                    
+                    return false;
+                }, bug.id);
+                
+                if (!clicked) {
+                    console.log(`    ⚠️ 无法点击 Bug ${bug.id}`);
+                    continue;
+                }
+                
+                // 等待弹窗加载
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                // 尝试点击"详情"选项卡
+                await page.evaluate(() => {
+                    const allElements = Array.from(document.querySelectorAll('*'));
+                    for (const el of allElements) {
+                        const text = el.textContent.trim();
+                        if ((text === '详情' || text.includes('详情')) && 
+                            (el.tagName === 'BUTTON' || el.tagName === 'SPAN' || el.tagName === 'DIV')) {
+                            const style = window.getComputedStyle(el);
+                            if (style.cursor === 'pointer' || el.tagName === 'BUTTON' || el.closest('button')) {
+                                el.click();
+                                break;
+                            }
+                        }
+                    }
+                });
+                
+                // 等待选项卡内容加载
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                // 从详情页提取额外信息
+                const details = await page.evaluate(() => {
+                    const details = {
+                        vin: '',
+                        build_version: '',
+                        compile_type: '',
+                        log_address: '',
+                        issue_time: ''
+                    };
+                    
+                    const fullText = document.body.innerText;
+                    
+                    // 提取VIN号
+                    const vinMatch = fullText.match(/车辆VIN号\s*：\s*([A-Z0-9]+)/i) || 
+                                    fullText.match(/VIN号\s*：\s*([A-Z0-9]+)/i) ||
+                                    fullText.match(/VIN\s*[:：]\s*([A-Z0-9]{17})/i);
+                    if (vinMatch) {
+                        details.vin = vinMatch[1].trim();
+                    }
+                    
+                    // 提取Build版本
+                    const buildMatch = fullText.match(/Build版本[:\s]*：?\s*(.+)/i);
+                    if (buildMatch) {
+                        details.build_version = buildMatch[1].trim();
+                    }
+                    
+                    // 提取编译类型
+                    const compileTypeMatch = fullText.match(/编译类型[:\s]*：?\s*(.+)/i);
+                    if (compileTypeMatch) {
+                        details.compile_type = compileTypeMatch[1].trim();
+                    }
+                    
+                    // 提取Log地址 - 从 link 属性中提取
+                    const elementsWithLink = document.querySelectorAll('[link]');
+                    for (const element of elementsWithLink) {
+                        const linkAttr = element.getAttribute('link');
+                        const text = (element.textContent || '').trim();
+                        
+                        if (linkAttr && linkAttr.length > 10) {
+                            if (text.includes('下载') || 
+                                linkAttr.toLowerCase().includes('log') || 
+                                linkAttr.toLowerCase().includes('download') ||
+                                linkAttr.toLowerCase().includes('monitor')) {
+                                details.log_address = linkAttr;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    return details;
+                });
+                
+                // 合并详细信息到 Bug 对象
+                const bugWithDetails = {
+                    ...bug,
+                    vin: details.vin || '',
+                    build_version: details.build_version || '',
+                    compile_type: details.compile_type || '',
+                    log_address: details.log_address || '',
+                    issue_time: details.issue_time || ''
+                };
+                
+                // 标记为已提取
+                extractedBugIds.add(bug.id);
+                allBugs.push(bugWithDetails);
+                
+                console.log(`    ✓ 已提取 Bug ${bug.id}`);
+                if (details.vin) console.log(`      VIN: ${details.vin}`);
+                if (details.build_version) console.log(`      Build: ${details.build_version.substring(0, 60)}...`);
+                if (details.compile_type) console.log(`      编译类型: ${details.compile_type}`);
+                if (details.log_address) console.log(`      Log: ${details.log_address.substring(0, 80)}...`);
+                
+                // 关闭弹窗（按 ESC）
+                await page.keyboard.press('Escape');
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+            } catch (e) {
+                console.log(`    ✗ 处理 Bug ${bug.id} 时出错:`, e.message);
+            }
+        }
+        
+        // 如果已经发现早于目标日期的 Bug，停止滚动
+        if (foundOlderBug) {
+            console.log('\n✓ 已发现早于目标日期的 Bug，停止滚动');
+            break;
+        }
+        
+        // 第四步：滚动到下一批 Bug
+        console.log('\n→ 滚动到下一批 Bug...');
+        const scrollResult = await page.evaluate(() => {
+            const gridContainer = document.querySelector('#multi_function_table, .ReactVirtualized__Grid');
+            
+            if (gridContainer) {
+                const oldScrollTop = gridContainer.scrollTop;
+                const scrollAmount = 300;
+                
+                gridContainer.scrollTop += scrollAmount;
+                
+                const newScrollTop = gridContainer.scrollTop;
+                const scrolledPixels = newScrollTop - oldScrollTop;
+                
+                return { 
+                    success: scrolledPixels > 0,
+                    oldScrollTop,
+                    newScrollTop,
+                    scrolledPixels
+                };
+            } else {
+                window.scrollBy(0, 300);
+                return { success: true, isPageScroll: true };
+            }
+        });
+        
+        if (scrollResult.isPageScroll) {
+            console.log('  → 未找到虚拟列表容器，已滚动整个页面');
+        } else if (scrollResult.success) {
+            console.log(`  → ✓ 滚动了 ${scrollResult.scrolledPixels}px (从 ${scrollResult.oldScrollTop} 到 ${scrollResult.newScrollTop})`);
+        } else {
+            console.log('  → ✗ 无法继续滚动（可能已到达底部）');
+            break;
+        }
+        
+        // 等待新内容加载
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    console.log(`\n========== 提取完成 ==========)`);
+    console.log(`总共滚动 ${scrollRound} 轮`);
+    console.log(`总共提取 ${allBugs.length} 个Bug`);
+    
+    return allBugs;
+}
+
 async function extractBugsSmart() {
     console.log('使用智能方式提取Bug信息...\n');
     
@@ -23,10 +382,19 @@ async function extractBugsSmart() {
     console.log('打开页面并登录...');
     await page.goto(CONFIG.url, { waitUntil: 'networkidle2', timeout: 60000 });
     
+    // 等待页面完全加载
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
     // 登录
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    const usernameInput = await page.$('input[type="text"], input[type="email"]');
-    const passwordInput = await page.$('input[type="password"]');
+    let usernameInput = null;
+    let passwordInput = null;
+    
+    try {
+        usernameInput = await page.$('input[type="text"], input[type="email"]');
+        passwordInput = await page.$('input[type="password"]');
+    } catch (e) {
+        console.log('⚠️ 查找登录元素时出错:', e.message);
+    }
     
     if (usernameInput && passwordInput) {
         await usernameInput.click({ clickCount: 3 });
@@ -62,6 +430,54 @@ async function extractBugsSmart() {
     // 等待页面加载
     await new Promise(resolve => setTimeout(resolve, 25000));
     
+    // 尝试设置每页显示最大数量的Bug
+    console.log('→ 尝试设置每页显示最大数量...');
+    try {
+        const pageSizeSet = await page.evaluate(() => {
+            // 查找每页显示数量的下拉框或输入框
+            const allElements = Array.from(document.querySelectorAll('*'));
+            for (const el of allElements) {
+                const text = (el.textContent || '').trim();
+                const className = String(el.className || '');
+                
+                // 查找包含“每页”、“条/页”、“page size”等文字的元系
+                if ((text.includes('每页') || text.includes('条/页') || text.includes('page size') ||
+                     className.toLowerCase().includes('pagesize') || className.toLowerCase().includes('page-size')) &&
+                    (el.tagName === 'SELECT' || el.tagName === 'INPUT' || el.tagName === 'BUTTON' ||
+                     window.getComputedStyle(el).cursor === 'pointer')) {
+                    
+                    if (el.tagName === 'SELECT') {
+                        // 如果是下拉框，选择最大值
+                        const options = Array.from(el.options);
+                        const maxOption = options.reduce((max, opt) => {
+                            const val = parseInt(opt.value) || 0;
+                            return val > max ? val : max;
+                        }, 0);
+                        
+                        if (maxOption > 0) {
+                            el.value = String(maxOption);
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            console.log(`已设置每页显示 ${maxOption} 条`);
+                            return true;
+                        }
+                    } else {
+                        // 点击打开下拉菜单
+                        el.click();
+                        console.log('已点击每页显示数量控件');
+                        return true;
+                    }
+                }
+            }
+            return false;
+        });
+        
+        if (pageSizeSet) {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+    } catch (e) {
+        console.log('设置每页显示数量失败:', e.message);
+    }
+    
     // 获取命令行参数
     const args = process.argv.slice(2);
     const dateParam = args[0] || '2026-05-12';
@@ -76,114 +492,91 @@ async function extractBugsSmart() {
     // 使用JavaScript直接解析页面内容,获取Bug列表
     console.log('正在提取Bug列表...');
     
-    // 先检查页面文本长度
-    const textLength = await page.evaluate(() => document.body.innerText.length);
-    console.log(`页面文本长度: ${textLength}`);
+    // 先检查页面状态
+    const pageState = await page.evaluate(() => {
+        return {
+            url: window.location.href,
+            bodyTextLength: document.body.innerText.length,
+            scrollHeight: document.body.scrollHeight,
+            clientHeight: document.documentElement.clientHeight,
+            hasIssueList: !!document.querySelector('.issue-list, .bug-list, [class*="issue"], [class*="bug"]'),
+            bugCount: (document.body.innerText.match(/GJLD-\d+/g) || []).length,
+            // 检查是否有滚动容器
+            scrollContainers: Array.from(document.querySelectorAll('[style*="overflow"], [class*="scroll"], [class*="list"]')).length,
+            // 检查是否有“加载更多”按钮
+            hasLoadMore: !!Array.from(document.querySelectorAll('*')).find(el => 
+                el.textContent && (el.textContent.includes('加载更多') || el.textContent.includes('Load More'))
+            ),
+            // 获取所有包含分页相关文字的文本
+            paginationTexts: Array.from(document.querySelectorAll('*'))
+                .map(el => (el.textContent || '').trim())
+                .filter(text => text && (/\d+\/\d+/.test(text) || /共/.test(text) || /条/.test(text) || /页/.test(text) || />/.test(text) || /下一页/.test(text)))
+                .slice(0, 20)
+        };
+    });
+    console.log(`页面状态: URL=${pageState.url.substring(0, 80)}`);
+    console.log(`页面文本长度: ${pageState.bodyTextLength}`);
+    console.log(`页面高度: ${pageState.scrollHeight}px, 可视高度: ${pageState.clientHeight}px`);
+    console.log(`是否有Bug列表: ${pageState.hasIssueList}`);
+    console.log(`当前找到 ${pageState.bugCount} 个Bug`);
+    console.log(`滚动容器数: ${pageState.scrollContainers}`);
+    console.log(`有加载更多按钮: ${pageState.hasLoadMore}`);
+    if (pageState.paginationTexts.length > 0) {
+        console.log(`分页相关文本:`);
+        pageState.paginationTexts.forEach((text, i) => {
+            if (i < 10) console.log(`  ${i + 1}. "${text}"`);
+        });
+        console.log('');
+    } else {
+        console.log(`分页相关文本: 无\n`);
+    }
     
-    const bugList = await page.evaluate((targetDate, searchKeyword, searchProject) => {
-        const text = document.body.innerText;
-        const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    // 如果页面内容太少，等待更长时间
+    if (pageState.bodyTextLength < 1000) {
+        console.log('⚠️ 页面内容较少，等待更多时间加载...');
+        await new Promise(resolve => setTimeout(resolve, 15000));
         
-        const bugs = [];
-        let currentBug = null;
-        
-        // 遍历每一行,识别Bug模式
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-            
-            // 检查是否是Bug ID行 (格式: GJLD-XXXXXX)
-            const bugIdMatch = line.match(/GJLD-\d+/);
-            if (bugIdMatch) {
-                // 保存上一个Bug
-                if (currentBug) {
-                    bugs.push(currentBug);
-                }
-                
-                // 创建新的Bug对象
-                currentBug = {
-                    id: bugIdMatch[0],
-                    title: '',
-                    priority: '',
-                    status: '',
-                    assignee: '',
-                    created_at: '',
-                    reporter: ''
-                };
-                
-                // 标题通常是ID的下一行或同一行的其他部分
-                if (i + 1 < lines.length) {
-                    currentBug.title = lines[i + 1];
-                }
-                
-                continue;
-            }
-            
-            // 如果当前有Bug对象,尝试填充其他字段
-            if (currentBug) {
-                // 优先级 (P0, P1, P2, etc.)
-                if (/^P[0-4]$/.test(line)) {
-                    currentBug.priority = line;
-                }
-                
-                // 状态
-                if (line.includes('问题提出') || line.includes('进行中') || 
-                    line.includes('已完成') || line.includes('未开始')) {
-                    currentBug.status = line;
-                }
-                
-                // 指派人 (通常是一个人名,2-4个中文字符)
-                // 需要排除"问题提出"这样的状态文本
-                if (/^[一-龥]{2,4}$/.test(line) && !line.includes('助手') && 
-                    !line.includes('问题') && !line.includes('完成') && !line.includes('开始')) {
-                    if (!currentBug.assignee || currentBug.assignee === '问题提出') {
-                        currentBug.assignee = line;
-                    }
-                }
-                
-                // 报告人
-                if (line.includes('日志平台告警助手')) {
-                    currentBug.reporter = line;
-                }
-                
-                // 日期时间 (格式: 2026-05-12 HH:MM:SS)
-                const dateMatch = line.match(/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}/);
-                if (dateMatch) {
-                    currentBug.created_at = dateMatch[0];
-                    
-                    // 检查是否符合日期过滤(暂时禁用)
-                    // if (!currentBug.created_at.startsWith(targetDate)) {
-                    //     currentBug = null; // 不符合日期要求,丢弃
-                    // }
-                }
-            }
-        }
-        
-        // 添加最后一个Bug
-        if (currentBug) {
-            bugs.push(currentBug);
-        }
-        
-        // 过滤逻辑：先匹配项目名，再匹配关键字
-        let filteredBugs = bugs;
-        
-        // 第一步：如果提供了项目名，先按项目名过滤
-        if (searchProject) {
-            filteredBugs = filteredBugs.filter(bug => 
-                bug.title.toLowerCase().includes(searchProject.toLowerCase())
-            );
-        }
-        
-        // 第二步：如果提供了关键字，再按关键字过滤
-        if (searchKeyword) {
-            filteredBugs = filteredBugs.filter(bug => 
-                bug.title.toLowerCase().includes(searchKeyword.toLowerCase())
-            );
-        }
-        
-        return filteredBugs;
-    }, dateParam, keyword, projectName);
+        // 再次检查
+        const newState = await page.evaluate(() => document.body.innerText.length);
+        console.log(`等待后页面文本长度: ${newState}`);
+    }
     
-    console.log(`✓ 找到 ${bugList.length} 个符合条件的Bug\n`);
+    // 检查虚拟列表容器是否存在
+    console.log('\n→ 检查虚拟列表容器...');
+    const containerCheck = await page.evaluate(() => {
+        const gridContainer = document.querySelector('#multi_function_table');
+        const reactGrid = document.querySelector('.ReactVirtualized__Grid');
+        
+        return {
+            hasMultiFunctionTable: !!gridContainer,
+            hasReactGrid: !!reactGrid,
+            multiFunctionTableId: gridContainer ? gridContainer.id : null,
+            reactGridClass: reactGrid ? reactGrid.className : null,
+            allDivsWithId: Array.from(document.querySelectorAll('div[id]')).map(el => el.id).filter(id => id.includes('multi') || id.includes('table') || id.includes('grid')),
+            allDivsWithClass: Array.from(document.querySelectorAll('div[class*="Virtualized"]')).map(el => el.className)
+        };
+    });
+    console.log(`  有 #multi_function_table: ${containerCheck.hasMultiFunctionTable}`);
+    console.log(`  有 .ReactVirtualized__Grid: ${containerCheck.hasReactGrid}`);
+    if (containerCheck.multiFunctionTableId) {
+        console.log(`  ID: ${containerCheck.multiFunctionTableId}`);
+    }
+    if (containerCheck.reactGridClass) {
+        console.log(`  Class: ${containerCheck.reactGridClass.substring(0, 100)}`);
+    }
+    if (containerCheck.allDivsWithId.length > 0) {
+        console.log(`  包含 multi/table/grid 的 div ID:`, containerCheck.allDivsWithId.slice(0, 5));
+    }
+    if (containerCheck.allDivsWithClass.length > 0) {
+        console.log(`  包含 Virtualized 的 div Class:`, containerCheck.allDivsWithClass.slice(0, 3));
+    }
+    console.log('');
+    
+    // 使用新的滚动并提取逻辑
+    console.log('→ 开始滚动并逐个提取Bug...');
+    const bugList = await autoScrollAndExtract(page, dateParam, keyword, projectName);
+    
+    console.log(`\n✓ 找到 ${bugList.length} 个符合条件的Bug\n`);
     
     // DEBUG模式: 只处理前2个Bug
     const debugMode = false;
