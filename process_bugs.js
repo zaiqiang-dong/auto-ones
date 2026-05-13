@@ -4,6 +4,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+const AdmZip = require('adm-zip'); // 用于解压 zip 文件
 
 // 配置
 const CONFIG = {
@@ -112,6 +113,9 @@ async function processBug(bug, baseDir, browser) {
     } else {
         console.log(`  ⚠ 没有 Log 文件，跳过 Dump 解析`);
     }
+    
+    // 步骤8: 无论解析成功与否，都解压缩目录下的 zip 文件
+    await extractZipFiles(bugDir, bugId);
 }
 
 /**
@@ -445,6 +449,37 @@ async function analyzeDump(bug, bugDir, logFilePath, browser) {
         
     } finally {
         await page.close();
+    }
+}
+
+/**
+ * 解压缩目录下的所有 zip 文件
+ */
+async function extractZipFiles(bugDir, bugId) {
+    console.log(`  → 检查并解压压缩文件...`);
+    
+    const files = fs.readdirSync(bugDir);
+    const zipFiles = files.filter(f => f.toLowerCase().endsWith('.zip'));
+    
+    if (zipFiles.length === 0) {
+        console.log(`  ⚠ 未找到 zip 文件`);
+        return;
+    }
+    
+    console.log(`  → 找到 ${zipFiles.length} 个 zip 文件: ${zipFiles.join(', ')}`);
+    
+    for (const zipFile of zipFiles) {
+        const zipPath = path.join(bugDir, zipFile);
+        const extractDir = path.join(bugDir, path.basename(zipFile, '.zip'));
+        
+        try {
+            console.log(`    → 解压: ${zipFile}`);
+            const zip = new AdmZip(zipPath);
+            zip.extractAllTo(extractDir, true); // true = 覆盖已存在的文件
+            console.log(`    ✓ 解压完成: ${extractDir}`);
+        } catch (error) {
+            console.log(`    ✗ 解压失败: ${error.message}`);
+        }
     }
 }
 
