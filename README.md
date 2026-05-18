@@ -63,6 +63,21 @@ node process_bugs.js extract_bugs/2026-05-12.json
 4. 自动访问 Dump 分析器进行解析
 5. 下载解析结果并保存
 
+### 生成飞书文档
+
+脚本会根据日期读取 `extract_bugs/YYYY-MM-DD.json`，把 Bug 信息整理为 Markdown，然后通过 `lark-cli docs +create --as user` 创建飞书文档。
+
+```bash
+# 生成飞书文档
+node create_lark_doc.js 2026-05-17
+
+# 自定义标题
+node create_lark_doc.js 2026-05-17 --title "2026-05-17 Bug 汇总"
+
+# 仅预览 Markdown，不创建文档
+node create_lark_doc.js 2026-05-17 --dry-run
+```
+
 ### 参数说明
 
 - **参数1 (必需)**: 日期，格式为 YYYY-MM-DD

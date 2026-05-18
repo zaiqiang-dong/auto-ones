@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node extract_smart.js",
     "extract": "node extract_smart.js",
-    "process": "node process_bugs.js"
+    "process": "node process_bugs.js",
+    "lark-doc": "node create_lark_doc.js"
   },
   "keywords": [
     "puppeteer",
