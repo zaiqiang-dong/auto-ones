@@ -53,7 +53,7 @@ node extract_smart.js 2026-05-12 minidump 五菱F710S
 
 ```bash
 # 处理提取的 JSON 文件
-node process_bugs.js output/bugs_2026-05-12_xxx.json
+node process_bugs.js extract_bugs/2026-05-12.json
 ```
 
 该脚本会：
@@ -80,9 +80,9 @@ node process_bugs.js output/bugs_2026-05-12_xxx.json
 
 ### 输出结果
 
-提取的 Bug 信息将保存到 `output` 目录下，文件名为：
+提取的 Bug 信息将保存到 `extract_bugs` 目录下，文件名为：
 ```
-bugs_YYYY-MM-DD_时间戳.json
+YYYY-MM-DD.json
 ```
 
 JSON 文件格式示例：

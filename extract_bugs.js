@@ -714,8 +714,7 @@ async function extractBugsSmart() {
         fs.mkdirSync(outputDir, { recursive: true });
     }
     
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const outputFile = path.join(outputDir, `bugs_${dateParam}_${timestamp}.json`);
+    const outputFile = path.join(outputDir, `${dateParam}.json`);
     
     fs.writeFileSync(outputFile, JSON.stringify(bugsWithDetails, null, 2), 'utf-8');
     
