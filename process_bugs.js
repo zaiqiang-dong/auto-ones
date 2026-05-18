@@ -11,6 +11,7 @@ const zlib = require('zlib'); // 用于 gzip 解压缩
 // 配置
 const CONFIG = {
     dumpAnalyzerUrl: 'http://172.25.32.27:8088/',
+    headless: process.env.PROCESS_BUGS_HEADFUL !== '1',
     // 项目名映射：JSON中的项目名 -> 分析器中的项目名
     projectMapping: {
         '奇瑞T16A': 'T16A',
@@ -656,11 +657,16 @@ async function main() {
     console.log(`创建日期目录: ${baseDir}\n`);
     
     // 启动浏览器
-    console.log('启动浏览器...');
+    console.log(`启动浏览器... (${CONFIG.headless ? '静默无头模式' : '可视调试模式'})`);
     const browser = await puppeteer.launch({
-        headless: false, // 设置为 true 可以在后台运行
-        slowMo: 50,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        headless: CONFIG.headless,
+        slowMo: CONFIG.headless ? 0 : 50,
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--disable-dev-shm-usage'
+        ]
     });
     
     try {
