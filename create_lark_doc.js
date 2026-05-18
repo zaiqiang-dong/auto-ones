@@ -164,6 +164,39 @@ function getDmesgFilePath(date, bugId) {
     return walk(bugRoot);
 }
 
+function getUefiLogFiles(date, bugId) {
+    const bugRoot = path.join(__dirname, 'processed_bugs', date, bugId);
+    const uefiLogFiles = [];
+
+    function walk(dir) {
+        if (!fs.existsSync(dir)) {
+            return;
+        }
+
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isFile() && /^UefiLog\d+\.txt$/.test(entry.name)) {
+                // 提取编号
+                const match = entry.name.match(/UefiLog(\d+)\.txt$/);
+                if (match) {
+                    const number = parseInt(match[1], 10);
+                    uefiLogFiles.push({ path: fullPath, number, name: entry.name });
+                }
+            }
+            if (entry.isDirectory()) {
+                walk(fullPath);
+            }
+        }
+    }
+
+    walk(bugRoot);
+
+    // 按编号降序排序,取前3个
+    uefiLogFiles.sort((a, b) => b.number - a.number);
+    return uefiLogFiles.slice(0, 3);
+}
+
 function extractDocRef(stdout) {
     const text = String(stdout || '').trim();
     const jsonMatch = text.match(/"url"\s*:\s*"([^"]+)"/i);
@@ -287,19 +320,39 @@ async function main() {
 
     console.log(`文档引用: ${docRef}`);
     for (const [index, bug] of bugs.entries()) {
+        // 上传 dmesg_TZ.txt
         const dmesgFile = getDmesgFilePath(args.date, bug.id);
-        if (!dmesgFile) {
+        if (dmesgFile) {
+            const anchor = getBugSelection(index, bug);
+            try {
+                await insertFileIntoDoc(docRef, anchor, dmesgFile);
+            } catch (error) {
+                console.error(`插入失败 ${bug.id} (dmesg_TZ.txt): ${error.message}`);
+                if (error.stderr) {
+                    console.error(error.stderr.trim());
+                }
+            }
+        } else {
             console.log(`跳过 ${bug.id}: 未找到 dmesg_TZ.txt`);
+        }
+
+        // 上传 UefiLog 文件(编号最大的3个)
+        const uefiLogFiles = getUefiLogFiles(args.date, bug.id);
+        if (uefiLogFiles.length === 0) {
+            console.log(`跳过 ${bug.id}: 未找到 UefiLog 文件`);
             continue;
         }
 
-        const anchor = getBugSelection(index, bug);
-        try {
-            await insertFileIntoDoc(docRef, anchor, dmesgFile);
-        } catch (error) {
-            console.error(`插入失败 ${bug.id}: ${error.message}`);
-            if (error.stderr) {
-                console.error(error.stderr.trim());
+        console.log(`找到 ${uefiLogFiles.length} 个 UefiLog 文件: ${uefiLogFiles.map(f => f.name).join(', ')}`);
+        for (const uefiFile of uefiLogFiles) {
+            const anchor = getBugSelection(index, bug);
+            try {
+                await insertFileIntoDoc(docRef, anchor, uefiFile.path);
+            } catch (error) {
+                console.error(`插入失败 ${bug.id} (${uefiFile.name}): ${error.message}`);
+                if (error.stderr) {
+                    console.error(error.stderr.trim());
+                }
             }
         }
     }
