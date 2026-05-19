@@ -5,12 +5,17 @@ const { execFile } = require('child_process');
 function usage() {
     console.log(`
 用法:
-  node create_lark_doc.js <YYYY-MM-DD> [--title 文档标题] [--dry-run]
+  node create_lark_doc.js <YYYY-MM-DD> [--title 文档标题] [--folder-token 文件夹Token] [--dry-run]
 
 示例:
   node create_lark_doc.js 2026-05-17
   node create_lark_doc.js 2026-05-17 --title "2026-05-17 Bug 汇总"
+  node create_lark_doc.js 2026-05-17 --folder-token "fldxxx"
   node create_lark_doc.js 2026-05-17 --dry-run
+
+说明:
+  --folder-token: 指定父文件夹 Token (可选),文档将创建在该文件夹下
+                  如果不指定,文档将创建在默认位置(我的空间)
 `);
 }
 
@@ -18,6 +23,7 @@ function parseArgs(argv) {
     const result = {
         date: '',
         title: '',
+        folderToken: '',
         dryRun: false,
         help: false
     };
@@ -30,6 +36,8 @@ function parseArgs(argv) {
             result.dryRun = true;
         } else if (arg === '--title') {
             result.title = argv[++i] || '';
+        } else if (arg === '--folder-token') {
+            result.folderToken = argv[++i] || '';
         } else if (!result.date) {
             result.date = arg;
         } else {
@@ -221,11 +229,17 @@ function getBugSelection(index, bug) {
     return `${index + 1}. ${valueOrDash(bug.id)} ${valueOrDash(bug.title)}`;
 }
 
-function createLarkDoc(title, markdown) {
+function createLarkDoc(title, markdown, folderToken) {
     return new Promise((resolve, reject) => {
         const args = ['docs', '+create', '--title', title, '--markdown', markdown, '--as', 'user'];
+        
+        // 如果指定了文件夹 Token,添加到参数中
+        if (folderToken) {
+            args.push('--folder-token', folderToken);
+        }
+        
         console.log(
-            `执行命令: lark-cli docs +create --title ${quoteForShell(title)} --markdown ${quoteForShell(markdown)} --as user`
+            `执行命令: lark-cli docs +create --title ${quoteForShell(title)} --markdown ${quoteForShell(markdown)}${folderToken ? ' --folder-token ' + quoteForShell(folderToken) : ''} --as user`
         );
         execFile('lark-cli', args, { maxBuffer: 1024 * 1024 * 20 }, (error, stdout, stderr) => {
             if (error) {
@@ -285,26 +299,29 @@ async function main() {
 
     validateDate(args.date);
     const { filePath, bugs } = readBugFile(args.date);
-    const title = args.title || `${args.date} Bug 汇总`;
+    const title = args.title || `bugs-${args.date}`;
     const markdown = buildMarkdown(args.date, bugs);
 
     console.log(`读取文件: ${filePath}`);
     console.log(`Bug 数量: ${bugs.length}`);
     console.log(`文档标题: ${title}`);
+    if (args.folderToken) {
+        console.log(`文件夹 Token: ${args.folderToken}`);
+    }
 
     if (args.dryRun) {
         console.log('\n========== Markdown 预览 ==========\n');
         console.log(markdown);
         console.log(
             `\n命令预览:\n` +
-            `lark-cli docs +create --title ${quoteForShell(title)} --markdown ${quoteForShell(markdown)} --as user`
+            `lark-cli docs +create --title ${quoteForShell(title)} --markdown ${quoteForShell(markdown)}${args.folderToken ? ' --folder-token ' + quoteForShell(args.folderToken) : ''} --as user`
         );
-        console.log('\n后续会按每个 Bug 标题插入对应的 dmesg_TZ.txt 文件。');
+        console.log('\n后续会按每个 Bug 标题插入对应的 dmesg_TZ.txt 和 UefiLog 文件。');
         return;
     }
 
     console.log('正在调用 lark-cli 创建文档...');
-    const result = await createLarkDoc(title, markdown);
+    const result = await createLarkDoc(title, markdown, args.folderToken);
     const docRef = extractDocRef(result.stdout) || extractDocRef(result.stderr);
 
     if (result.stdout.trim()) {
